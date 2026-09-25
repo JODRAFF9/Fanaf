@@ -5,7 +5,7 @@ Option Explicit
 '
 ' Utilisation :
 '   1. Lancer une fois InitialiserClasseur : cree la feuille Collecte et son bouton Enregistrer.
-'   2. Copier le bloc A1:F66 d'un formulaire et le coller en A1 de la feuille Collecte.
+'   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille Collecte.
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
 '
 ' Feuilles brutes (masquées), données telles que saisies :
@@ -20,6 +20,10 @@ Option Explicit
 '   Chiffres clés        : Pays|Societe|Rubrique|Annee
 ' Les ratios et agregats ne sont pas stockes : ils se calculent dans les etudes.
 '
+' Les blocs sont reperes par leurs titres (A - EMISSIONS, B - PRESTATIONS, C - AUTRES
+' CHIFFRES) et non par des adresses fixes : le bloc C est lu ligne a ligne jusqu'a
+' "Taux de couverture", ce qui absorbe l'ajout de rubriques (ex. "Resultats au Bilan").
+'
 ' Fichier encodé en Windows-1252 (ANSI), l'encodage attendu par l'éditeur VBA.
 
 Private Const F_COLLECTE As String = "Collecte"
@@ -28,10 +32,18 @@ Private Const F_EP As String = "Emission&Prestations"
 Private Const SUFFIXE_BRUT As String = " (brut)"
 Private Const NOM_BOUTON As String = "btnEnregistrer"
 
-' Cellules de saisie numerique du formulaire (les autres cellules chiffrees sont des formules).
-Private Const CELLULES_NUMERIQUES As String = _
-    "D6:D8,B13:B18,D13:D18,B20:B25,D20:D25,B27,D27," & _
-    "B33:B38,D33:D38,B40:B45,D40:D45,B47,D47,C51:D64"
+' Derniere ligne examinee sur la feuille Collecte.
+Private Const LIGNE_MAX As Long = 120
+
+' Decalages des lignes de saisie par rapport au titre d'un bloc A ou B
+' (titre en ligne 9 -> saisies en 13-18, 20-25 et 27 dans le modele).
+Private Const DECALAGES_AB As String = "4,5,6,7,8,9,11,12,13,14,15,16,18"
+
+' Position des blocs dans la feuille Collecte, renseignee par Reperer.
+Private mA As Long      ' ligne du titre "A - EMISSIONS NETTES"
+Private mB As Long      ' ligne du titre "B - PRESTATIONS VERSEES"
+Private mC As Long      ' ligne du titre "C - AUTRES CHIFFRES CLES"
+Private mFinC As Long   ' derniere ligne du bloc C ("Taux de couverture")
 
 Private Function NomChiffresCles() As String
     NomChiffresCles = "Chiffres clés"
@@ -90,7 +102,7 @@ Public Sub EnregistrerCollecte()
     End If
 
     societe = Texte(ws.Range("B1").Value)
-    anN = CLng(ws.Range("B10").Value) + 1
+    anN = AnneeN1(ws) + 1
 
     Set wsIdB = FeuilleBrute(F_ID & SUFFIXE_BRUT, EntetesIdentification())
     Set wsEpB = FeuilleBrute(F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations())
@@ -124,7 +136,7 @@ Public Sub EnregistrerCollecte()
 
     If MsgBox(societe & " (" & anN & ") enregistrée." & vbLf & vbLf & _
               "Vider la feuille Collecte pour la saisie suivante ?", vbYesNo + vbInformation, "Collecte") = vbYes Then
-        ws.Range("A1:F66").ClearContents
+        ws.Range("A1:F" & LIGNE_MAX).ClearContents
     End If
     Exit Sub
 
@@ -136,32 +148,83 @@ Erreur:
 End Sub
 
 ' ---------------------------------------------------------------------------------
-' Controles de la feuille Collecte (A1:F66). Renvoie "" si tout est correct.
+' Reperage des blocs et controles de la feuille Collecte
 ' ---------------------------------------------------------------------------------
+
+' Repere les titres des blocs et la fin du bloc C. Renvoie False si la mise en page
+' ne correspond pas au modele.
+Private Function Reperer(ByVal ws As Worksheet) As Boolean
+    Dim r As Long, t As String
+
+    mA = 0: mB = 0: mC = 0: mFinC = 0
+    For r = 1 To LIGNE_MAX
+        t = Texte(ws.Cells(r, 2).Value)
+        If mA = 0 And InStr(1, t, "EMISSIONS", vbTextCompare) > 0 Then mA = r
+        If mB = 0 And InStr(1, t, "PRESTATIONS", vbTextCompare) > 0 Then mB = r
+        If mC = 0 And InStr(1, t, "AUTRES CHIFFRES", vbTextCompare) > 0 Then mC = r
+    Next r
+    If mA = 0 Or mB = 0 Or mC = 0 Then Exit Function
+
+    ' Bloc C : de la ligne apres "Rubriques" jusqu'a "Taux de couverture" (ou 1re ligne vide)
+    For r = mC + 2 To LIGNE_MAX
+        t = Texte(ws.Cells(r, 1).Value)
+        If Len(t) = 0 Then Exit For
+        mFinC = r
+        If InStr(1, t, "Taux de couverture", vbTextCompare) > 0 Then Exit For
+    Next r
+
+    Reperer = UCase$(Texte(ws.Range("A1").Value)) = "NOM DE LA SOCIETE" _
+        And mB = mA + 20 And mC = mB + 20 And mFinC > mC + 1 _
+        And UCase$(Texte(ws.Cells(mA + 1, 1).Value)) = "BRANCHES" _
+        And UCase$(Texte(ws.Cells(mB + 1, 1).Value)) = "BRANCHES" _
+        And UCase$(Texte(ws.Cells(mC + 1, 1).Value)) = "RUBRIQUES"
+End Function
+
+Private Function AnneeN1(ByVal ws As Worksheet) As Long
+    AnneeN1 = CLng(Nombre(ws.Cells(mA + 1, 2).Value))
+End Function
+
+' Rubriques du bloc C calculees par formule dans le formulaire : non reprises.
+Private Function EstDerivee(ByVal rubrique As String) As Boolean
+    EstDerivee = StrComp(rubrique, "Autres actifs", vbTextCompare) = 0 _
+        Or InStr(1, rubrique, "Taux de couverture", vbTextCompare) > 0
+End Function
+
+' Toutes les cellules de saisie chiffree, selon la position des blocs.
+Private Function CellulesSaisie(ByVal ws As Worksheet) As Range
+    Dim res As Range, d As Variant, r As Long
+
+    Set res = ws.Range("D6:D8")
+    For Each d In Split(DECALAGES_AB, ",")
+        Set res = Union(res, ws.Cells(mA + CLng(d), 2), ws.Cells(mA + CLng(d), 4), _
+                             ws.Cells(mB + CLng(d), 2), ws.Cells(mB + CLng(d), 4))
+    Next d
+    For r = mC + 2 To mFinC
+        If Not EstDerivee(Libelle(ws.Cells(r, 1).Value)) Then
+            Set res = Union(res, ws.Cells(r, 3), ws.Cells(r, 4))
+        End If
+    Next r
+    Set CellulesSaisie = res
+End Function
+
+' Renvoie "" si tout est correct, sinon la liste des anomalies.
 Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     Dim msg As String, c As Range, invalides As String, v As Variant
 
-    ' Structure : libelles fixes du modele
-    If UCase$(Texte(ws.Range("A1").Value)) <> "NOM DE LA SOCIETE" _
-       Or InStr(1, Texte(ws.Range("B9").Value), "EMISSIONS", vbTextCompare) = 0 _
-       Or InStr(1, Texte(ws.Range("B29").Value), "PRESTATIONS", vbTextCompare) = 0 _
-       Or InStr(1, Texte(ws.Range("B49").Value), "AUTRES CHIFFRES", vbTextCompare) = 0 _
-       Or UCase$(Texte(ws.Range("A10").Value)) <> "BRANCHES" _
-       Or UCase$(Texte(ws.Range("A50").Value)) <> "RUBRIQUES" Then
-        ControlerCollecte = "- Le bloc collé en A1 n'a pas la mise en page du modèle (A1:F66)."
+    If Not Reperer(ws) Then
+        ControlerCollecte = "- Le bloc collé en A1 n'a pas la mise en page du formulaire" & vbLf & _
+            "  (titres A - EMISSIONS, B - PRESTATIONS et C - AUTRES CHIFFRES introuvables ou décalés)."
         Exit Function
     End If
 
     ' Champs obligatoires
     If Len(Texte(ws.Range("B1").Value)) = 0 Then msg = msg & vbLf & "- Nom de la société vide (B1)."
     If Len(Texte(ws.Range("B2").Value)) = 0 Then msg = msg & vbLf & "- Pays vide (B2)."
-    v = ws.Range("B10").Value
-    If IsError(v) Then
-        msg = msg & vbLf & "- Année N-1 invalide (B10)."
-    ElseIf Not IsNumeric(v) Or IsEmpty(v) Then
-        msg = msg & vbLf & "- Année N-1 invalide (B10)."
+    v = Nombre(ws.Cells(mA + 1, 2).Value)
+    If Not IsNumeric(v) Or IsEmpty(v) Then
+        msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
     ElseIf v < 1990 Or v > 2100 Or v <> Int(v) Then
-        msg = msg & vbLf & "- Année N-1 invalide (B10)."
+        msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
     End If
 
     ' Date de creation : vide ou date
@@ -172,13 +235,13 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
         msg = msg & vbLf & "- Date de création invalide (B4)."
     End If
 
-    ' Cellules chiffrees : vides ou numeriques
-    For Each c In ws.Range(CELLULES_NUMERIQUES).Cells
-        v = c.Value
-        If IsError(v) Then
+    ' Cellules chiffrees : vides ou numeriques (les nombres colles en texte sont acceptes)
+    For Each c In CellulesSaisie(ws).Cells
+        If IsError(c.Value) Then
             invalides = invalides & " " & c.Address(False, False)
-        ElseIf Not IsEmpty(v) And Not IsNumeric(v) Then
-            invalides = invalides & " " & c.Address(False, False)
+        Else
+            v = Nombre(c.Value)
+            If Not IsEmpty(v) And Not IsNumeric(v) Then invalides = invalides & " " & c.Address(False, False)
         End If
     Next c
     If Len(invalides) > 0 Then msg = msg & vbLf & "- Valeurs non numériques :" & invalides
@@ -208,7 +271,7 @@ End Function
 ' Une ligne par saisie.
 Private Sub LireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
     AjouterLigne dest, Array(idSaisie, _
-        Cle(Texte(ws.Range("B2").Value), Texte(ws.Range("B1").Value), CLng(ws.Range("B10").Value) + 1), _
+        Cle(Texte(ws.Range("B2").Value), Texte(ws.Range("B1").Value), AnneeN1(ws) + 1), _
         Texte(ws.Range("B1").Value), _
         Texte(ws.Range("B2").Value), _
         Texte(ws.Range("B3").Value), _
@@ -217,29 +280,31 @@ Private Sub LireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, By
         Nombre(ws.Range("D6").Value), _
         Nombre(ws.Range("D7").Value), _
         Nombre(ws.Range("D8").Value), _
-        CLng(ws.Range("B10").Value) + 1, _
+        AnneeN1(ws) + 1, _
         Now)
 End Sub
 
-' Blocs A (emissions) et B (prestations, meme grille 20 lignes plus bas) :
-' N-1 en colonne B, N en colonne D. Une ligne par rubrique et par annee.
+' Blocs A (emissions) et B (prestations, meme grille) : N-1 en colonne B, N en colonne D.
+' Une ligne par rubrique et par annee.
 Private Sub LireEmissionsPrestations(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
-    Dim lignes As Variant, blocs As Variant
-    Dim i As Long, b As Long, r As Long, anN1 As Long
+    Dim decalages As Variant, blocs As Variant, titres As Variant
+    Dim i As Long, b As Long, r As Long, d As Long, anN1 As Long
     Dim societe As String, pays As String, categorie As String, rubrique As String
 
     societe = Texte(ws.Range("B1").Value)
     pays = Texte(ws.Range("B2").Value)
-    anN1 = CLng(ws.Range("B10").Value)
+    anN1 = AnneeN1(ws)
 
-    lignes = Array(13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 27)
+    decalages = Split(DECALAGES_AB, ",")
     blocs = Array("Émissions", "Prestations")
+    titres = Array(mA, mB)
     For b = 0 To 1
-        For i = LBound(lignes) To UBound(lignes)
-            r = lignes(i) + 20 * b
-            Select Case lignes(i)
-                Case Is < 19: categorie = "Individuelles"
-                Case Is < 26: categorie = "Collectives"
+        For i = LBound(decalages) To UBound(decalages)
+            d = CLng(decalages(i))
+            r = titres(b) + d
+            Select Case d
+                Case Is < 10: categorie = "Individuelles"
+                Case Is < 17: categorie = "Collectives"
                 Case Else: categorie = "Acceptations"
             End Select
             rubrique = Libelle(ws.Cells(r, 1).Value)
@@ -251,22 +316,24 @@ Private Sub LireEmissionsPrestations(ByVal ws As Worksheet, ByVal idSaisie As Lo
     Next b
 End Sub
 
-' Bloc C : N-1 en colonne C, N en colonne D, lignes 51 a 64.
-' Les lignes 65 (autres actifs) et 66 (taux de couverture) sont des formules, non reprises.
+' Bloc C : N-1 en colonne C, N en colonne D, de la ligne apres "Rubriques" jusqu'a
+' "Taux de couverture". Autres actifs et taux de couverture sont des formules, non reprises.
 Private Sub LireChiffresCles(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
     Dim r As Long, anN1 As Long
     Dim societe As String, pays As String, rubrique As String
 
     societe = Texte(ws.Range("B1").Value)
     pays = Texte(ws.Range("B2").Value)
-    anN1 = CLng(ws.Range("B10").Value)
+    anN1 = AnneeN1(ws)
 
-    For r = 51 To 64
+    For r = mC + 2 To mFinC
         rubrique = Libelle(ws.Cells(r, 1).Value)
+        If EstDerivee(rubrique) Then GoTo Suivante
         AjouterLigne dest, Array(idSaisie, Cle(pays, societe, rubrique, anN1), _
             societe, pays, rubrique, anN1, Nombre(ws.Cells(r, 3).Value), ws.Cells(r, 3).Address(False, False))
         AjouterLigne dest, Array(idSaisie, Cle(pays, societe, rubrique, anN1 + 1), _
             societe, pays, rubrique, anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
+Suivante:
     Next r
 End Sub
 
@@ -427,13 +494,23 @@ Private Function Libelle(ByVal v As Variant) As String
 End Function
 
 ' Cellule vide ou en erreur -> Empty (distinct d'un vrai 0).
+' Un nombre colle en texte ("1 177 646", espaces insecables compris) est converti.
 Private Function Nombre(ByVal v As Variant) As Variant
+    Dim s As String
+
     If IsError(v) Then
         Nombre = Empty
     ElseIf IsEmpty(v) Then
         Nombre = Empty
-    ElseIf Len(Trim$(CStr(v))) = 0 Then
-        Nombre = Empty
+    ElseIf VarType(v) = vbString Then
+        s = Replace(Replace(Replace(v, " ", ""), ChrW(160), ""), ChrW(8239), "")
+        If Len(s) = 0 Then
+            Nombre = Empty
+        ElseIf IsNumeric(s) Then
+            Nombre = CDbl(s)
+        Else
+            Nombre = v
+        End If
     ElseIf IsNumeric(v) Then
         Nombre = CDbl(v)
     Else
