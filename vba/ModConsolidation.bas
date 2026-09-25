@@ -423,19 +423,19 @@ End Function
 ' Ecriture dans les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
-        "Directeur général", "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", _
-        "Employés", "Année N", "Date d'import")
+    EntetesIdentification = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+        "Directeur general", "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", _
+        "Employes", "Annee N", "Date d'import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
-        "Bloc", "Catégorie", "Rubrique", "Mesure", "Année", "Valeur (milliers F CFA)", "Cellule source")
+    EntetesEmissionsPrestations = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+        "Bloc", "Categorie", "Rubrique", "Mesure", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
-        "Rubrique", "Année", "Valeur (milliers F CFA)", "Cellule source")
+    EntetesChiffresCles = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+        "Rubrique", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 ' Une ligne par saisie.
@@ -560,12 +560,12 @@ Public Sub RafraichirCopies()
 
     ' On saute la colonne A (N° saisie) et on s'arrête avant Date d'import / Cellule source ;
     ' la valeur est reprise par formule * 1000.
-    CreerCopie wsIdB, F_ID, Array("Clé", "Code société", "Société", "Pays", "Branche", "Directeur général", _
-        "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", "Employés", "Année N"), 12, ""
-    CreerCopie wsEpB, F_EP, Array("Clé", "Code société", "Société", "Pays", "Branche", "Bloc", "Catégorie", _
-        "Rubrique", "Mesure", "Année", "Valeur (F CFA)"), 10, "L"
-    CreerCopie wsCcB, NomChiffresCles(), Array("Clé", "Code société", "Société", "Pays", "Branche", _
-        "Rubrique", "Année", "Valeur (F CFA)"), 7, "I"
+    CreerCopie wsIdB, F_ID, Array("Cle", "Code societe", "Societe", "Pays", "Branche", "Directeur general", _
+        "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N"), 12, ""
+    CreerCopie wsEpB, F_EP, Array("Cle", "Code societe", "Societe", "Pays", "Branche", "Bloc", "Categorie", _
+        "Rubrique", "Mesure", "Annee", "Valeur (F CFA)"), 10, "L"
+    CreerCopie wsCcB, NomChiffresCles(), Array("Cle", "Code societe", "Societe", "Pays", "Branche", _
+        "Rubrique", "Annee", "Valeur (F CFA)"), 7, "I"
 End Sub
 
 ' Copie visible d'une feuille brute : colonnes B a (1 + nbCols) en valeurs, puis,
