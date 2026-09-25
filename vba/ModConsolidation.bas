@@ -14,6 +14,12 @@ Option Explicit
 '   Identification, Emission&Prestations, Chiffres cles
 '   Valeur_FCFA = valeur brute (milliers) * 1000, par formule
 '
+' Chaque table commence par une colonne Cle, unique par ligne, pour RECHERCHEV :
+'   Identification       : Pays|Societe|Annee
+'   Emission&Prestations : Pays|Societe|Bloc|Categorie|Rubrique|Annee
+'   Chiffres cles        : Pays|Societe|Rubrique|Annee
+' Les ratios et agregats ne sont pas stockes : ils se calculent dans les etudes.
+'
 ' Le code source est sans accents pour s'importer sans souci dans l'editeur VBA ;
 ' le "e accent aigu" du nom de feuille est produit par ChrW(233).
 
@@ -186,23 +192,24 @@ End Function
 ' Lecture du formulaire vers les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("Id_saisie", "Societe", "Pays", "DG", "Date_creation", _
+    EntetesIdentification = Array("Id_saisie", "Cle", "Societe", "Pays", "DG", "Date_creation", _
         "Capital_social", "Cadres", "Maitrise", "Employes", "Annee_N", "Date_import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("Id_saisie", "Societe", "Pays", "Bloc", "Categorie", _
+    EntetesEmissionsPrestations = Array("Id_saisie", "Cle", "Societe", "Pays", "Bloc", "Categorie", _
         "Rubrique", "Annee", "Valeur", "Cellule_source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("Id_saisie", "Societe", "Pays", "Rubrique", "Annee", _
+    EntetesChiffresCles = Array("Id_saisie", "Cle", "Societe", "Pays", "Rubrique", "Annee", _
         "Valeur", "Cellule_source")
 End Function
 
 ' Une ligne par saisie.
 Private Sub LireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
     AjouterLigne dest, Array(idSaisie, _
+        Cle(Texte(ws.Range("B2").Value), Texte(ws.Range("B1").Value), CLng(ws.Range("B10").Value) + 1), _
         Texte(ws.Range("B1").Value), _
         Texte(ws.Range("B2").Value), _
         Texte(ws.Range("B3").Value), _
@@ -237,10 +244,10 @@ Private Sub LireEmissionsPrestations(ByVal ws As Worksheet, ByVal idSaisie As Lo
                 Case Else: categorie = "Acceptations"
             End Select
             rubrique = Libelle(ws.Cells(r, 1).Value)
-            AjouterLigne dest, Array(idSaisie, societe, pays, blocs(b), categorie, rubrique, _
-                anN1, Nombre(ws.Cells(r, 2).Value), ws.Cells(r, 2).Address(False, False))
-            AjouterLigne dest, Array(idSaisie, societe, pays, blocs(b), categorie, rubrique, _
-                anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
+            AjouterLigne dest, Array(idSaisie, Cle(pays, societe, blocs(b), categorie, rubrique, anN1), _
+                societe, pays, blocs(b), categorie, rubrique, anN1, Nombre(ws.Cells(r, 2).Value), ws.Cells(r, 2).Address(False, False))
+            AjouterLigne dest, Array(idSaisie, Cle(pays, societe, blocs(b), categorie, rubrique, anN1 + 1), _
+                societe, pays, blocs(b), categorie, rubrique, anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
         Next i
     Next b
 End Sub
@@ -257,10 +264,10 @@ Private Sub LireChiffresCles(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVa
 
     For r = 51 To 64
         rubrique = Libelle(ws.Cells(r, 1).Value)
-        AjouterLigne dest, Array(idSaisie, societe, pays, rubrique, _
-            anN1, Nombre(ws.Cells(r, 3).Value), ws.Cells(r, 3).Address(False, False))
-        AjouterLigne dest, Array(idSaisie, societe, pays, rubrique, _
-            anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
+        AjouterLigne dest, Array(idSaisie, Cle(pays, societe, rubrique, anN1), _
+            societe, pays, rubrique, anN1, Nombre(ws.Cells(r, 3).Value), ws.Cells(r, 3).Address(False, False))
+        AjouterLigne dest, Array(idSaisie, Cle(pays, societe, rubrique, anN1 + 1), _
+            societe, pays, rubrique, anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
     Next r
 End Sub
 
@@ -278,8 +285,8 @@ Private Function SaisiesExistantes(ByVal wsIdB As Worksheet, ByVal societe As St
 
     der = wsIdB.Cells(wsIdB.Rows.Count, 1).End(xlUp).Row
     For r = 2 To der
-        If StrComp(Texte(wsIdB.Cells(r, 2).Value), societe, vbTextCompare) = 0 _
-           And Val(wsIdB.Cells(r, 10).Value) = anN Then
+        If StrComp(Texte(wsIdB.Cells(r, 3).Value), societe, vbTextCompare) = 0 _
+           And Val(wsIdB.Cells(r, 11).Value) = anN Then
             res.Add wsIdB.Cells(r, 1).Value
         End If
     Next r
@@ -335,20 +342,20 @@ Public Sub RafraichirCopies()
     Set wsEpB = FeuilleBrute(F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations())
     Set wsCcB = FeuilleBrute(NomChiffresCles() & SUFFIXE_BRUT, EntetesChiffresCles())
 
-    wsIdB.Columns("E").NumberFormat = "dd/mm/yyyy"
-    wsIdB.Columns("F").NumberFormat = "#,##0"
-    wsIdB.Columns("K").NumberFormat = "dd/mm/yyyy hh:mm"
-    wsEpB.Columns("H").NumberFormat = "#,##0.000"
-    wsCcB.Columns("F").NumberFormat = "#,##0.000"
+    wsIdB.Columns("F").NumberFormat = "dd/mm/yyyy"
+    wsIdB.Columns("G").NumberFormat = "#,##0"
+    wsIdB.Columns("L").NumberFormat = "dd/mm/yyyy hh:mm"
+    wsEpB.Columns("I").NumberFormat = "#,##0.000"
+    wsCcB.Columns("G").NumberFormat = "#,##0.000"
 
     ' On saute la colonne A (Id_saisie) et on s'arrete avant Date_import / Cellule_source ;
     ' la valeur est reprise par formule * 1000.
-    CreerCopie wsIdB, F_ID, Array("Societe", "Pays", "DG", "Date_creation", "Capital_social", _
-        "Cadres", "Maitrise", "Employes", "Annee_N"), 9, ""
-    CreerCopie wsEpB, F_EP, Array("Societe", "Pays", "Bloc", "Categorie", "Rubrique", "Annee", _
-        "Valeur_FCFA"), 6, "H"
-    CreerCopie wsCcB, NomChiffresCles(), Array("Societe", "Pays", "Rubrique", "Annee", _
-        "Valeur_FCFA"), 4, "F"
+    CreerCopie wsIdB, F_ID, Array("Cle", "Societe", "Pays", "DG", "Date_creation", "Capital_social", _
+        "Cadres", "Maitrise", "Employes", "Annee_N"), 10, ""
+    CreerCopie wsEpB, F_EP, Array("Cle", "Societe", "Pays", "Bloc", "Categorie", "Rubrique", "Annee", _
+        "Valeur_FCFA"), 7, "I"
+    CreerCopie wsCcB, NomChiffresCles(), Array("Cle", "Societe", "Pays", "Rubrique", "Annee", _
+        "Valeur_FCFA"), 5, "G"
 End Sub
 
 ' Copie visible d'une feuille brute : colonnes B a (1 + nbCols) en valeurs, puis,
@@ -385,8 +392,8 @@ Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal ent
     End If
 
     If nom = F_ID Then
-        ws.Columns("D").NumberFormat = "dd/mm/yyyy"
-        ws.Columns("E").NumberFormat = "#,##0"
+        ws.Columns("E").NumberFormat = "dd/mm/yyyy"
+        ws.Columns("F").NumberFormat = "#,##0"
     End If
     ws.Visible = xlSheetVisible
     ws.Range("A1").Resize(1, nbEntetes).EntireColumn.AutoFit
@@ -395,6 +402,16 @@ End Sub
 ' ---------------------------------------------------------------------------------
 ' Conversions
 ' ---------------------------------------------------------------------------------
+' Cle de recherche : elements separes par "|", ex. "BENIN|ATLANTIQUE ASSURANCE BENIN VIE|2021".
+Private Function Cle(ParamArray parts() As Variant) As String
+    Dim i As Long, s As String
+    For i = LBound(parts) To UBound(parts)
+        If i > LBound(parts) Then s = s & "|"
+        s = s & CStr(parts(i))
+    Next i
+    Cle = s
+End Function
+
 Private Function Texte(ByVal v As Variant) As String
     If IsError(v) Then Exit Function
     Texte = Application.WorksheetFunction.Trim(CStr(v))
