@@ -3,6 +3,12 @@ Option Explicit
 
 ' Copie dans ce classeur toutes les feuilles des classeurs Excel du meme dossier.
 '
+' - Seul le contenu des cellules est copie : valeurs, formats et largeurs de colonnes.
+'   Les formules deviennent des valeurs ; le code VBA des feuilles, les boutons, les noms
+'   definis et les liaisons ne sont pas repris (un code VBA copie qui ne compile pas
+'   bloquerait toutes les macros du classeur).
+' - Les feuilles graphiques sont ignorees.
+'
 ' - Les classeurs sont ouverts en lecture seule puis refermes sans modification.
 ' - Chaque feuille copiee est nommee "<nom du fichier> - <nom de la feuille>",
 '   tronque a 31 caracteres (limite Excel) et rendu unique si besoin : "... (2)".
@@ -51,7 +57,7 @@ Public Sub CopierFeuillesDuDossier()
             erreurs = erreurs & vbLf & "- " & fichier & " : ouverture impossible"
         Else
             nbFichiers = nbFichiers + 1
-            For Each sh In wbSrc.Sheets
+            For Each sh In wbSrc.Worksheets
                 If sh.Visible <> xlSheetVeryHidden Then
                     If CopierFeuille(sh, NomFichierSansExtension(fichier)) Then
                         nbFeuilles = nbFeuilles + 1
@@ -60,6 +66,7 @@ Public Sub CopierFeuillesDuDossier()
                     End If
                 End If
             Next sh
+            Application.CutCopyMode = False
             wbSrc.Close SaveChanges:=False
         End If
     Next nom
@@ -93,18 +100,30 @@ Private Function DossierDesFichiers() As String
     End With
 End Function
 
-' Copie une feuille a la fin de ce classeur et la renomme. Renvoie False en cas d'echec.
-Private Function CopierFeuille(ByVal sh As Object, ByVal prefixe As String) As Boolean
-    Dim nb As Long
+' Cree une feuille a la fin de ce classeur et y colle le contenu de sh
+' (formats, valeurs, largeurs de colonnes). Renvoie False en cas d'echec.
+Private Function CopierFeuille(ByVal sh As Worksheet, ByVal prefixe As String) As Boolean
+    Dim dest As Worksheet, zone As Range
 
     On Error GoTo Echec
-    nb = ThisWorkbook.Sheets.Count
-    sh.Copy After:=ThisWorkbook.Sheets(nb)
-    ThisWorkbook.Sheets(nb + 1).Name = NomUnique(prefixe & " - " & sh.Name)
+    Set dest = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+    dest.Name = NomUnique(prefixe & " - " & sh.Name)
+
+    Set zone = sh.UsedRange
+    zone.Copy
+    With dest.Range(zone.Address)
+        .PasteSpecial xlPasteColumnWidths
+        .PasteSpecial xlPasteFormats
+        .PasteSpecial xlPasteValues
+    End With
+    Application.CutCopyMode = False
+    If sh.Visible = xlSheetHidden Then dest.Visible = xlSheetHidden
+
     CopierFeuille = True
     Exit Function
 
 Echec:
+    Application.CutCopyMode = False
     CopierFeuille = False
 End Function
 
