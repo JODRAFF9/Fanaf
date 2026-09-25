@@ -5,15 +5,18 @@ Option Explicit
 '
 ' Utilisation :
 '   1. Lancer une fois InitialiserClasseur : cree les feuilles Collecte Vie et
-'      Collecte Non Vie, chacune avec son bouton Enregistrer (H2).
+'      Collecte Non Vie, chacune avec ses boutons Enregistrer (H2) et
+'      Supprimer le precedent (H5).
 '   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille de collecte
 '      correspondant a la branche de la societe.
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
 '      La branche (Vie / Non-vie) est celle de la feuille de collecte.
+'      Chaque enregistrement recoit un numero qui augmente a chaque fois (jamais reutilise).
+'   4. Supprimer le precedent : efface le dernier enregistrement de la branche de la feuille.
 '
 ' Feuilles brutes (masquees), donnees telles que saisies :
 '   Identification (brut), Emission&Prestations (brut), Chiffres cles (brut)
-' Copies visibles, sans No saisie, Date d'import ni Cellule source :
+' Copies visibles, sans Date d'import ni Cellule source :
 '   Identification, Emission&Prestations, Chiffres cles
 '   Valeur (F CFA) = valeur brute (milliers F CFA) * 1000, par formule
 '
@@ -42,6 +45,8 @@ Private Const F_ID As String = "Identification"
 Private Const F_EP As String = "Emission&Prestations"
 Private Const SUFFIXE_BRUT As String = " (brut)"
 Private Const NOM_BOUTON As String = "btnEnregistrer"
+Private Const NOM_BOUTON_SUPPR As String = "btnSupprimer"
+Private Const NOM_COMPTEUR As String = "NumeroEnregistrement"   ' nom masque du classeur
 
 ' Derniere ligne examinee sur la feuille Collecte.
 Private Const LIGNE_MAX As Long = 150
@@ -65,8 +70,8 @@ End Function
 ' Mise en place : feuille Collecte + bouton Enregistrer
 ' ---------------------------------------------------------------------------------
 Public Sub InitialiserClasseur()
-    PreparerCollecte F_COLLECTE_NV, "EnregistrerNonVie"
-    PreparerCollecte F_COLLECTE_VIE, "EnregistrerVie"
+    PreparerCollecte F_COLLECTE_NV, "EnregistrerNonVie", "SupprimerPrecedentNonVie"
+    PreparerCollecte F_COLLECTE_VIE, "EnregistrerVie", "SupprimerPrecedentVie"
 
     FeuilleBrute F_ID & SUFFIXE_BRUT, EntetesIdentification()
     FeuilleBrute F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations()
@@ -79,8 +84,8 @@ Public Sub InitialiserClasseur()
         "puis cliquez sur Enregistrer.", vbInformation, "Collecte"
 End Sub
 
-' Cree (si besoin) une feuille de collecte avec son bouton Enregistrer.
-Private Sub PreparerCollecte(ByVal nom As String, ByVal macro As String)
+' Cree (si besoin) une feuille de collecte avec ses boutons Enregistrer et Supprimer le precedent.
+Private Sub PreparerCollecte(ByVal nom As String, ByVal macroEnregistrer As String, ByVal macroSupprimer As String)
     Dim ws As Worksheet, cible As Range, btn As Object
 
     On Error Resume Next
@@ -93,17 +98,23 @@ Private Sub PreparerCollecte(ByVal nom As String, ByVal macro As String)
 
     On Error Resume Next
     ws.Buttons(NOM_BOUTON).Delete
+    ws.Buttons(NOM_BOUTON_SUPPR).Delete
     On Error GoTo 0
-
-    Set cible = ws.Range("H2")
-    Set btn = ws.Buttons.Add(cible.Left, cible.Top, 120, 28)
-    btn.Name = NOM_BOUTON
-    btn.Caption = "Enregistrer"
-    btn.OnAction = macro
-
 
     ' Nettoie la cellule Code societe des versions precedentes
     ws.Range("H4:H5").Clear
+
+    Set cible = ws.Range("H2")
+    Set btn = ws.Buttons.Add(cible.Left, cible.Top, 150, 28)
+    btn.Name = NOM_BOUTON
+    btn.Caption = "Enregistrer"
+    btn.OnAction = macroEnregistrer
+
+    Set cible = ws.Range("H5")
+    Set btn = ws.Buttons.Add(cible.Left, cible.Top, 150, 28)
+    btn.Name = NOM_BOUTON_SUPPR
+    btn.Caption = "Supprimer le pr" & ChrW(233) & "c" & ChrW(233) & "dent"
+    btn.OnAction = macroSupprimer
 End Sub
 
 ' ---------------------------------------------------------------------------------
@@ -154,7 +165,7 @@ Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As Str
         SupprimerSaisies wsCcB, anciens
     End If
 
-    idSaisie = Application.WorksheetFunction.Max(wsIdB.Columns(1)) + 1
+    idSaisie = ProchainNumero(wsIdB)
     Set entrees = LireEntrees(ws)
     EcrireIdentification ws, idSaisie, wsIdB
     EcrireEntrees ws, idSaisie, entrees, wsEpB, wsCcB
@@ -164,7 +175,7 @@ Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As Str
     ws.Activate
     Application.ScreenUpdating = True
 
-    If MsgBox(societe & " (" & anN & ") enregistree." & vbLf & vbLf & _
+    If MsgBox(societe & " (" & anN & ") enregistree sous le numero " & idSaisie & "." & vbLf & vbLf & _
               "Vider la feuille " & ws.Name & " pour la saisie suivante ?", vbYesNo + vbInformation, "Collecte") = vbYes Then
         ws.Range("A1:F" & LIGNE_MAX).ClearContents
     End If
@@ -175,6 +186,82 @@ Erreur:
     descErr = Err.Description
     Application.ScreenUpdating = True
     MsgBox "Erreur " & numErr & " :" & vbLf & descErr, vbCritical, "Collecte"
+End Sub
+
+' ---------------------------------------------------------------------------------
+' Numero d'enregistrement : compteur conserve dans un nom masque du classeur,
+' pour que le numero augmente toujours, meme apres une suppression.
+' ---------------------------------------------------------------------------------
+Private Function ProchainNumero(ByVal wsIdB As Worksheet) As Long
+    Dim n As Long, v As Variant, maxi As Double
+
+    On Error Resume Next
+    v = Evaluate(ThisWorkbook.Names(NOM_COMPTEUR).RefersTo)
+    On Error GoTo 0
+    If Not IsError(v) Then
+        If IsNumeric(v) And Not IsEmpty(v) Then n = CLng(v)
+    End If
+
+    maxi = Application.WorksheetFunction.Max(wsIdB.Columns(1))
+    If n < maxi Then n = CLng(maxi)
+
+    n = n + 1
+    ThisWorkbook.Names.Add Name:=NOM_COMPTEUR, RefersTo:="=" & n, Visible:=False
+    ProchainNumero = n
+End Function
+
+' ---------------------------------------------------------------------------------
+' Bouton Supprimer le precedent : dernier enregistrement de la branche de la feuille
+' ---------------------------------------------------------------------------------
+Public Sub SupprimerPrecedentVie()
+    SupprimerPrecedent ThisWorkbook.Worksheets(F_COLLECTE_VIE), TYPE_VIE
+End Sub
+
+Public Sub SupprimerPrecedentNonVie()
+    SupprimerPrecedent ThisWorkbook.Worksheets(F_COLLECTE_NV), TYPE_NV
+End Sub
+
+Private Sub SupprimerPrecedent(ByVal ws As Worksheet, ByVal typeCollecte As String)
+    Dim wsIdB As Worksheet, wsEpB As Worksheet, wsCcB As Worksheet
+    Dim r As Long, der As Long, ligne As Long, numero As Double
+    Dim ids As New Collection
+
+    Set wsIdB = FeuilleBrute(F_ID & SUFFIXE_BRUT, EntetesIdentification())
+    Set wsEpB = FeuilleBrute(F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations())
+    Set wsCcB = FeuilleBrute(NomChiffresCles() & SUFFIXE_BRUT, EntetesChiffresCles())
+
+    ' Plus grand numero de la branche
+    der = wsIdB.Cells(wsIdB.Rows.Count, 1).End(xlUp).Row
+    For r = 2 To der
+        If StrComp(Texte(wsIdB.Cells(r, 4).Value), typeCollecte, vbTextCompare) = 0 _
+           And IsNumeric(wsIdB.Cells(r, 1).Value) Then
+            If wsIdB.Cells(r, 1).Value > numero Then
+                numero = wsIdB.Cells(r, 1).Value
+                ligne = r
+            End If
+        End If
+    Next r
+
+    If ligne = 0 Then
+        MsgBox "Aucun enregistrement " & typeCollecte & " a supprimer.", vbInformation, "Collecte"
+        Exit Sub
+    End If
+
+    If MsgBox("Supprimer l'enregistrement numero " & numero & " :" & vbLf & _
+              Texte(wsIdB.Cells(ligne, 2).Value) & " (" & Texte(wsIdB.Cells(ligne, 3).Value) & ", " & _
+              wsIdB.Cells(ligne, 11).Value & ") ?", vbYesNo + vbExclamation, "Collecte") = vbNo Then Exit Sub
+
+    Application.ScreenUpdating = False
+    ids.Add numero
+    SupprimerSaisies wsIdB, ids
+    SupprimerSaisies wsEpB, ids
+    SupprimerSaisies wsCcB, ids
+    RafraichirCopies
+    MasquerBrutes
+    ws.Activate
+    Application.ScreenUpdating = True
+
+    MsgBox "Enregistrement numero " & numero & " supprime.", vbInformation, "Collecte"
 End Sub
 
 ' ---------------------------------------------------------------------------------
@@ -408,18 +495,18 @@ End Function
 ' Ecriture dans les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("No saisie", "Societe", "Pays", "Branche", _
+    EntetesIdentification = Array("No enregistrement", "Societe", "Pays", "Branche", _
         "Directeur general", "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", _
         "Employes", "Annee N", "Date d'import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("No saisie", "Societe", "Pays", "Branche", _
+    EntetesEmissionsPrestations = Array("No enregistrement", "Societe", "Pays", "Branche", _
         "Bloc", "Categorie", "Rubrique", "Mesure", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("No saisie", "Societe", "Pays", "Branche", _
+    EntetesChiffresCles = Array("No enregistrement", "Societe", "Pays", "Branche", _
         "Rubrique", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
@@ -542,17 +629,17 @@ Public Sub RafraichirCopies()
     wsEpB.Columns("J").NumberFormat = "#,##0.000"
     wsCcB.Columns("G").NumberFormat = "#,##0.000"
 
-    ' On saute la colonne A (No saisie) et on s'arrete avant Date d'import / Cellule source ;
+    ' Colonnes A a nbCols de la feuille brute, sans Date d'import ni Cellule source ;
     ' la valeur est reprise par formule * 1000.
-    CreerCopie wsIdB, F_ID, Array("Societe", "Pays", "Branche", "Directeur general", _
-        "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N"), 10, ""
-    CreerCopie wsEpB, F_EP, Array("Societe", "Pays", "Branche", "Bloc", "Categorie", _
-        "Rubrique", "Mesure", "Annee", "Valeur (F CFA)"), 8, "J"
-    CreerCopie wsCcB, NomChiffresCles(), Array("Societe", "Pays", "Branche", _
-        "Rubrique", "Annee", "Valeur (F CFA)"), 5, "G"
+    CreerCopie wsIdB, F_ID, Array("No enregistrement", "Societe", "Pays", "Branche", "Directeur general", _
+        "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N"), 11, ""
+    CreerCopie wsEpB, F_EP, Array("No enregistrement", "Societe", "Pays", "Branche", "Bloc", "Categorie", _
+        "Rubrique", "Mesure", "Annee", "Valeur (F CFA)"), 9, "J"
+    CreerCopie wsCcB, NomChiffresCles(), Array("No enregistrement", "Societe", "Pays", "Branche", _
+        "Rubrique", "Annee", "Valeur (F CFA)"), 6, "G"
 End Sub
 
-' Copie visible d'une feuille brute : colonnes B a (1 + nbCols) en valeurs, puis,
+' Copie visible d'une feuille brute : colonnes A a nbCols en valeurs, puis,
 ' si colValeur est renseignee, une colonne Valeur (F CFA) = brute!colValeur * 1000.
 Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal entetes As Variant, _
                        ByVal nbCols As Long, ByVal colValeur As String)
@@ -575,7 +662,7 @@ Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal ent
 
     derLig = wsBrut.Cells(wsBrut.Rows.Count, 1).End(xlUp).Row
     If derLig >= 2 Then
-        ws.Range("A2").Resize(derLig - 1, nbCols).Value = wsBrut.Range("B2").Resize(derLig - 1, nbCols).Value
+        ws.Range("A2").Resize(derLig - 1, nbCols).Value = wsBrut.Range("A2").Resize(derLig - 1, nbCols).Value
         If Len(colValeur) > 0 Then
             With ws.Cells(2, nbCols + 1).Resize(derLig - 1, 1)
                 .Formula = "=IF('" & wsBrut.Name & "'!" & colValeur & "2="""",""""," & _
@@ -586,8 +673,8 @@ Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal ent
     End If
 
     If nom = F_ID Then
-        ws.Columns("E").NumberFormat = "dd/mm/yyyy"
-        ws.Columns("F").NumberFormat = "#,##0"
+        ws.Columns("F").NumberFormat = "dd/mm/yyyy"
+        ws.Columns("G").NumberFormat = "#,##0"
     End If
     ws.Visible = xlSheetVisible
     ws.Range("A1").Resize(1, nbEntetes).EntireColumn.AutoFit
