@@ -6,23 +6,23 @@ Option Explicit
 ' Utilisation :
 '   1. Lancer une fois InitialiserClasseur : cree les feuilles Collecte Vie et
 '      Collecte Non Vie, chacune avec son bouton Enregistrer (H2) et sa cellule
-'      Code société (H5).
+'      Code societe (H5).
 '   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille de collecte
 '      correspondant au type de la societe, puis saisir le code societe en H5
 '      (le meme code chaque annee pour une societe).
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
 '      La branche (Vie / Non-vie) est celle de la feuille de collecte.
 '
-' Feuilles brutes (masquées), données telles que saisies :
-'   Identification (brut), Emission&Prestations (brut), Chiffres clés (brut)
-' Copies visibles, sans N° saisie, Date d'import ni Cellule source :
-'   Identification, Emission&Prestations, Chiffres clés
+' Feuilles brutes (masquees), donnees telles que saisies :
+'   Identification (brut), Emission&Prestations (brut), Chiffres cles (brut)
+' Copies visibles, sans No saisie, Date d'import ni Cellule source :
+'   Identification, Emission&Prestations, Chiffres cles
 '   Valeur (F CFA) = valeur brute (milliers F CFA) * 1000, par formule
 '
-' Chaque table commence par une colonne Clé, unique par ligne, pour RECHERCHEV :
+' Chaque table commence par une colonne Cle, unique par ligne, pour RECHERCHEV :
 '   Identification       : Code|Annee
 '   Emission&Prestations : Code|Bloc|Categorie|Rubrique|Mesure|Annee
-'   Chiffres clés        : Code|Rubrique|Annee
+'   Chiffres cles        : Code|Rubrique|Annee
 ' Le code societe (ex. BJ-AFGV) reste stable quand la raison sociale change.
 ' Les ratios et agregats ne sont pas stockes : ils se calculent dans les etudes.
 '
@@ -38,7 +38,8 @@ Option Explicit
 '   - bloc C : lu ligne a ligne jusqu'a "Taux de couverture" ;
 '       Autres actifs et Taux de couverture (formules) sont ignores
 '
-' Fichier encodé en Windows-1252 (ANSI), l'encodage attendu par l'éditeur VBA.
+' Code source en ASCII pur : aucun probleme d'encodage a l'import ou au copier-coller.
+' Le "e accent aigu" du nom de feuille Chiffres cles est produit par ChrW(233).
 
 Private Const F_COLLECTE_VIE As String = "Collecte Vie"
 Private Const F_COLLECTE_NV As String = "Collecte Non Vie"
@@ -65,7 +66,7 @@ Private mFinC As Long   ' derniere ligne du bloc C ("Taux de couverture")
 Private mType As String ' type de la feuille de collecte en cours : Vie ou Non-vie
 
 Private Function NomChiffresCles() As String
-    NomChiffresCles = "Chiffres clés"
+    NomChiffresCles = "Chiffres cl" & ChrW(233) & "s"
 End Function
 
 ' ---------------------------------------------------------------------------------
@@ -82,8 +83,8 @@ Public Sub InitialiserClasseur()
     MasquerBrutes
 
     ThisWorkbook.Worksheets(F_COLLECTE_VIE).Activate
-    MsgBox "Feuilles " & F_COLLECTE_VIE & " et " & F_COLLECTE_NV & " prêtes : collez le formulaire en A1, " & _
-        "saisissez le code société en " & CELLULE_CODE & " puis cliquez sur Enregistrer.", vbInformation, "Collecte"
+    MsgBox "Feuilles " & F_COLLECTE_VIE & " et " & F_COLLECTE_NV & " pretes : collez le formulaire en A1, " & _
+        "saisissez le code societe en " & CELLULE_CODE & " puis cliquez sur Enregistrer.", vbInformation, "Collecte"
 End Sub
 
 ' Cree (si besoin) une feuille de collecte avec son bouton et sa cellule de code.
@@ -108,7 +109,7 @@ Private Sub PreparerCollecte(ByVal nom As String, ByVal macro As String)
     btn.Caption = "Enregistrer"
     btn.OnAction = macro
 
-    ws.Range(CELLULE_CODE).Offset(-1, 0).Value = "Code société"
+    ws.Range(CELLULE_CODE).Offset(-1, 0).Value = "Code societe"
     ws.Range(CELLULE_CODE).Offset(-1, 0).Font.Bold = True
     ws.Range(CELLULE_CODE).NumberFormat = "@"
     ws.Range(CELLULE_CODE).BorderAround xlContinuous, xlThin
@@ -134,7 +135,7 @@ Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As Str
     mType = typeCollecte
     erreurs = ControlerCollecte(ws)
     If Len(erreurs) > 0 Then
-        MsgBox "Enregistrement refusé :" & vbLf & erreurs, vbExclamation, "Collecte"
+        MsgBox "Enregistrement refuse :" & vbLf & erreurs, vbExclamation, "Collecte"
         Exit Sub
     End If
 
@@ -149,8 +150,8 @@ Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As Str
     ' Meme code societe et meme annee deja enregistres : remplacement sur confirmation
     Set anciens = SaisiesExistantes(wsIdB, code, anN)
     If anciens.Count > 0 Then
-        If MsgBox(code & " (" & anN & ") est déjà enregistré." & vbLf & _
-                  "Remplacer les données existantes ?", vbYesNo + vbQuestion, "Collecte") = vbNo Then Exit Sub
+        If MsgBox(code & " (" & anN & ") est deja enregistre." & vbLf & _
+                  "Remplacer les donnees existantes ?", vbYesNo + vbQuestion, "Collecte") = vbNo Then Exit Sub
     End If
 
     Application.ScreenUpdating = False
@@ -172,7 +173,7 @@ Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As Str
     ws.Activate
     Application.ScreenUpdating = True
 
-    If MsgBox(societe & " (" & code & ", " & anN & ") enregistrée." & vbLf & vbLf & _
+    If MsgBox(societe & " (" & code & ", " & anN & ") enregistree." & vbLf & vbLf & _
               "Vider la feuille " & ws.Name & " pour la saisie suivante ?", vbYesNo + vbInformation, "Collecte") = vbYes Then
         ws.Range("A1:F" & LIGNE_MAX).ClearContents
         ws.Range(CELLULE_CODE).ClearContents
@@ -231,11 +232,11 @@ End Function
 
 Private Function NomBloc(ByVal titre As String) As String
     If InStr(1, titre, "EMISSIONS", vbTextCompare) > 0 Then
-        NomBloc = "Émissions"
+        NomBloc = "Emissions"
     ElseIf InStr(1, titre, "PRESTATIONS", vbTextCompare) > 0 Then
         NomBloc = "Prestations"
     ElseIf InStr(1, titre, "SINISTRALITE", vbTextCompare) > 0 Then
-        NomBloc = "Sinistralité"
+        NomBloc = "Sinistralite"
     Else
         NomBloc = titre
     End If
@@ -244,9 +245,9 @@ End Function
 ' Mesure unique d'un bloc vie, d'apres son titre.
 Private Function MesureParDefaut(ByVal titre As String) As String
     If InStr(1, titre, "EMISSIONS", vbTextCompare) > 0 Then
-        MesureParDefaut = "Émissions nettes"
+        MesureParDefaut = "Emissions nettes"
     ElseIf InStr(1, titre, "PRESTATIONS", vbTextCompare) > 0 Then
-        MesureParDefaut = "Prestations versées"
+        MesureParDefaut = "Prestations versees"
     Else
         MesureParDefaut = "Montant"
     End If
@@ -359,7 +360,7 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     Dim entrees As Collection
 
     If Not Reperer(ws) Then
-        ControlerCollecte = "- Le bloc collé en A1 n'a pas la mise en page du formulaire" & vbLf & _
+        ControlerCollecte = "- Le bloc colle en A1 n'a pas la mise en page du formulaire" & vbLf & _
             "  (titres A - EMISSIONS, B - PRESTATIONS ou SINISTRALITE et C - AUTRES CHIFFRES" & vbLf & _
             "  introuvables, ou lignes Branches / Rubriques absentes)."
         Exit Function
@@ -373,16 +374,16 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     End If
 
     ' Champs obligatoires
-    If Len(Texte(ws.Range("B1").Value)) = 0 Then msg = msg & vbLf & "- Nom de la société vide (B1)."
+    If Len(Texte(ws.Range("B1").Value)) = 0 Then msg = msg & vbLf & "- Nom de la societe vide (B1)."
     If Len(Texte(ws.Range("B2").Value)) = 0 Then msg = msg & vbLf & "- Pays vide (B2)."
-    If Len(CodeSociete(ws)) = 0 Then msg = msg & vbLf & "- Code société vide (" & CELLULE_CODE & ")."
+    If Len(CodeSociete(ws)) = 0 Then msg = msg & vbLf & "- Code societe vide (" & CELLULE_CODE & ")."
     v = Nombre(ws.Cells(mA + 1, 2).Value)
     If Not IsNumeric(v) Or IsEmpty(v) Then
-        msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
+        msg = msg & vbLf & "- Annee N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
         ControlerCollecte = Mid$(msg, 2)
         Exit Function
     ElseIf v < 1990 Or v > 2100 Or v <> Int(v) Then
-        msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
+        msg = msg & vbLf & "- Annee N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
         ControlerCollecte = Mid$(msg, 2)
         Exit Function
     End If
@@ -390,9 +391,9 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     ' Date de creation : vide ou date
     v = ws.Range("B4").Value
     If IsError(v) Then
-        msg = msg & vbLf & "- Date de création invalide (B4)."
+        msg = msg & vbLf & "- Date de creation invalide (B4)."
     ElseIf Not IsEmpty(v) And VarType(v) <> vbDate And Not IsNumeric(v) And Not IsDate(v) Then
-        msg = msg & vbLf & "- Date de création invalide (B4)."
+        msg = msg & vbLf & "- Date de creation invalide (B4)."
     End If
 
     ' Effectifs : vides ou numeriques
@@ -402,12 +403,12 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
 
     ' Cellules chiffrees des blocs : vides ou numeriques (nombres colles en texte acceptes)
     Set entrees = LireEntrees(ws)
-    If entrees.Count = 0 Then msg = msg & vbLf & "- Aucune donnée trouvée dans les blocs A, B et C."
+    If entrees.Count = 0 Then msg = msg & vbLf & "- Aucune donnee trouvee dans les blocs A, B et C."
     For Each e In entrees
         Set c = e(6)
         If Not EstNombreOuVide(c.Value) Then invalides = invalides & " " & c.Address(False, False)
     Next e
-    If Len(invalides) > 0 Then msg = msg & vbLf & "- Valeurs non numériques :" & invalides
+    If Len(invalides) > 0 Then msg = msg & vbLf & "- Valeurs non numeriques :" & invalides
 
     If Len(msg) > 0 Then msg = Mid$(msg, 2)
     ControlerCollecte = msg
@@ -423,18 +424,18 @@ End Function
 ' Ecriture dans les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+    EntetesIdentification = Array("No saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
         "Directeur general", "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", _
         "Employes", "Annee N", "Date d'import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+    EntetesEmissionsPrestations = Array("No saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
         "Bloc", "Categorie", "Rubrique", "Mesure", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("N° saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
+    EntetesChiffresCles = Array("No saisie", "Cle", "Code societe", "Societe", "Pays", "Branche", _
         "Rubrique", "Annee", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
@@ -456,7 +457,7 @@ Private Sub EcrireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, 
         Now)
 End Sub
 
-' Une ligne par entree, dans Emission&Prestations ou Chiffres clés.
+' Une ligne par entree, dans Emission&Prestations ou Chiffres cles.
 Private Sub EcrireEntrees(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal entrees As Collection, _
                           ByVal wsEpB As Worksheet, ByVal wsCcB As Worksheet)
     Dim e As Variant, c As Range
@@ -558,7 +559,7 @@ Public Sub RafraichirCopies()
     wsEpB.Columns("L").NumberFormat = "#,##0.000"
     wsCcB.Columns("I").NumberFormat = "#,##0.000"
 
-    ' On saute la colonne A (N° saisie) et on s'arrête avant Date d'import / Cellule source ;
+    ' On saute la colonne A (No saisie) et on s'arrete avant Date d'import / Cellule source ;
     ' la valeur est reprise par formule * 1000.
     CreerCopie wsIdB, F_ID, Array("Cle", "Code societe", "Societe", "Pays", "Branche", "Directeur general", _
         "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N"), 12, ""
@@ -569,7 +570,7 @@ Public Sub RafraichirCopies()
 End Sub
 
 ' Copie visible d'une feuille brute : colonnes B a (1 + nbCols) en valeurs, puis,
-' si colValeur est renseignée, une colonne Valeur (F CFA) = brute!colValeur * 1000.
+' si colValeur est renseignee, une colonne Valeur (F CFA) = brute!colValeur * 1000.
 Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal entetes As Variant, _
                        ByVal nbCols As Long, ByVal colValeur As String)
     Dim ws As Worksheet, nbEntetes As Long, derLig As Long
