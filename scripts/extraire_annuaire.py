@@ -156,8 +156,8 @@ def lire_fiche(page, num_page):
                 return i
         return None
 
-    iA = index(r"A ?- ?EMISSIONS")
-    iB = index(r"B ?- ?(PRESTATIONS|SINISTRALITE)")
+    iA = index(r"(^| )[AB]? ?- ?EMISSIONS NETTES")
+    iB = index(r"(^| )[ABC]? ?- ?(PRESTATIONS|SINISTRALITE)", iA + 1 if iA is not None else 0)
     if iA is None or iB is None:
         return None
     iC = index(r"^Rubriques", iB)
@@ -394,7 +394,8 @@ def pays_normalise(p):
     return unicodedata.normalize("NFKD", p).encode("ascii", "ignore").decode().upper().strip()
 
 
-def main(pdf_path, sortie):
+def lire_pdf(pdf_path):
+    """Lit toutes les fiches societes du PDF. Renvoie (fiches, pages non lues)."""
     fiches, ignorees = [], []
     pays_section = ""
     with pdfplumber.open(pdf_path) as pdf:
@@ -417,6 +418,11 @@ def main(pdf_path, sortie):
                 p = pays_section
             f["ident"]["Pays"] = p
             fiches.append(f)
+    return fiches, ignorees
+
+
+def main(pdf_path, sortie):
+    fiches, ignorees = lire_pdf(pdf_path)
     ecrire(fiches, sortie)
     print(f"{len(fiches)} fiches extraites ({sum(f['branche'] == 'Vie' for f in fiches)} vie, "
           f"{sum(f['branche'] == 'Non-vie' for f in fiches)} non-vie)")
