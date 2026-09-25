@@ -170,14 +170,19 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
     e_ep = ["No societe", "Societe", "Pays", "Branche", "Bloc", "Categorie", "Rubrique", "Mesure", "Annee"]
     e_cc = ["No societe", "Societe", "Pays", "Branche", "Rubrique", "Annee"]
     ne = len(libelles)
-    epv = feuille("Emission&Prestations", e_ep + [f"Valeur {e} (F CFA)" for e in libelles])
-    ccv = feuille("Chiffres clés", e_cc + [f"Valeur {e} (F CFA)" for e in libelles])
-    epb = feuille("Emission&Prestations (brut)", e_ep + [f"Valeur {e} (milliers F CFA)" for e in libelles]
-                  + [f"Source {e}" for e in libelles], True)
-    ccb = feuille("Chiffres clés (brut)", e_cc + [f"Valeur {e} (milliers F CFA)" for e in libelles]
-                  + [f"Source {e}" for e in libelles], True)
-    col_ep = [get_column_letter(len(e_ep) + 1 + k) for k in range(ne)]
-    col_cc = [get_column_letter(len(e_cc) + 1 + k) for k in range(ne)]
+    # "Valeur" : une valeur par ligne quelle que soit la source, calculee par formule a partir
+    # des colonnes par source ; si l'annee figure dans plusieurs sources, la plus recente
+    # est retenue, et "Source retenue" l'indique (formule egalement).
+    ret_v, ret_vb, ret_s = ["Valeur (F CFA)"], ["Valeur (milliers F CFA)"], ["Source retenue"]
+    epv = feuille("Emission&Prestations", e_ep + ret_v + ret_s + [f"Valeur {e} (F CFA)" for e in libelles])
+    ccv = feuille("Chiffres clés", e_cc + ret_v + ret_s + [f"Valeur {e} (F CFA)" for e in libelles])
+    epb = feuille("Emission&Prestations (brut)", e_ep + ret_vb + ret_s
+                  + [f"Valeur {e} (milliers F CFA)" for e in libelles] + [f"Source {e}" for e in libelles], True)
+    ccb = feuille("Chiffres clés (brut)", e_cc + ret_vb + ret_s
+                  + [f"Valeur {e} (milliers F CFA)" for e in libelles] + [f"Source {e}" for e in libelles], True)
+    col_ep = [get_column_letter(len(e_ep) + 3 + k) for k in range(ne)]
+    col_cc = [get_column_letter(len(e_cc) + 3 + k) for k in range(ne)]
+    ret_ep, ret_cc = get_column_letter(len(e_ep) + 1), get_column_letter(len(e_cc) + 1)
 
     n_enr = 0
     for no, s in enumerate(societes, 1):
@@ -206,13 +211,19 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
                 e = d.setdefault(cle_l, [None] * (2 * ne))
                 e[k] = v
                 e[ne + k] = ref(f)
-        for d, wsb, wsv, cols, nomb in ((lignes_ep, epb, epv, col_ep, "Emission&Prestations (brut)"),
-                                        (lignes_cc, ccb, ccv, col_cc, "Chiffres clés (brut)")):
+        for d, wsb, wsv, cols, cret, nomb in (
+                (lignes_ep, epb, epv, col_ep, ret_ep, "Emission&Prestations (brut)"),
+                (lignes_cc, ccb, ccv, col_cc, ret_cc, "Chiffres clés (brut)")):
             for cle_l in sorted(d, key=lambda c: (c[:-1], c[-1])):
-                wsb.append(base_soc + list(cle_l) + d[cle_l])
-                r = wsb.max_row
-                wsv.append(base_soc + list(cle_l) + [
-                    f"=IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}*1000)" for c in cols])
+                r = wsb.max_row + 1
+                # Valeur retenue et sa source, par formule : la source la plus recente renseignee
+                f_val = f_src = '""'
+                for c, lib in zip(cols, libelles):
+                    f_val = f'IF({c}{r}<>"",{c}{r},{f_val})'
+                    f_src = f'IF({c}{r}<>"","{lib}",{f_src})'
+                wsb.append(base_soc + list(cle_l) + ["=" + f_val, "=" + f_src] + d[cle_l])
+                wsv.append(base_soc + list(cle_l) + ["=" + f_val, "=" + f_src]
+                           + [f"=IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}*1000)" for c in cols])
 
     # --- Verification : bilan des tests de recalcul et concordance entre sources ---
     vf = feuille("Verification", ["Controle", "Source", "Resultat", "Detail"])
@@ -251,11 +262,11 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
         c.number_format = "dd/mm/yyyy"
     for c in idv["I"][1:]:
         c.number_format = "#,##0"
-    for ws, cols in ((epv, col_ep), (ccv, col_cc)):
+    for ws, cols in ((epv, col_ep + [ret_ep]), (ccv, col_cc + [ret_cc])):
         for col in cols:
             for c in ws[col][1:]:
                 c.number_format = "#,##0"
-    for ws, cols in ((epb, col_ep), (ccb, col_cc)):
+    for ws, cols in ((epb, col_ep + [ret_ep]), (ccb, col_cc + [ret_cc])):
         for col in cols:
             for c in ws[col][1:]:
                 c.number_format = "#,##0.000"
