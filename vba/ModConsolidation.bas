@@ -4,11 +4,14 @@ Option Explicit
 ' Collecte des formulaires FANAF, vie et non-vie (montants en milliers de F CFA).
 '
 ' Utilisation :
-'   1. Lancer une fois InitialiserClasseur : cree la feuille Collecte, son bouton
-'      Enregistrer (H2) et la cellule Code société (H5).
-'   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille Collecte,
-'      puis saisir le code societe en H5 (le meme code chaque annee pour une societe).
+'   1. Lancer une fois InitialiserClasseur : cree les feuilles Collecte Vie et
+'      Collecte Non Vie, chacune avec son bouton Enregistrer (H2) et sa cellule
+'      Code société (H5).
+'   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille de collecte
+'      correspondant au type de la societe, puis saisir le code societe en H5
+'      (le meme code chaque annee pour une societe).
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
+'      Le type (Vie / Non-vie) est celui de la feuille de collecte.
 '
 ' Feuilles brutes (masquées), données telles que saisies :
 '   Identification (brut), Emission&Prestations (brut), Chiffres clés (brut)
@@ -37,7 +40,10 @@ Option Explicit
 '
 ' Fichier encodé en Windows-1252 (ANSI), l'encodage attendu par l'éditeur VBA.
 
-Private Const F_COLLECTE As String = "Collecte"
+Private Const F_COLLECTE_VIE As String = "Collecte Vie"
+Private Const F_COLLECTE_NV As String = "Collecte Non Vie"
+Private Const TYPE_VIE As String = "Vie"
+Private Const TYPE_NV As String = "Non-vie"
 Private Const F_ID As String = "Identification"
 Private Const F_EP As String = "Emission&Prestations"
 Private Const SUFFIXE_BRUT As String = " (brut)"
@@ -56,6 +62,7 @@ Private mA As Long      ' ligne du titre "A - EMISSIONS NETTES"
 Private mB As Long      ' ligne du titre "B - PRESTATIONS VERSEES" ou "B - SINISTRALITE"
 Private mC As Long      ' ligne du titre "C - AUTRES CHIFFRES CLES"
 Private mFinC As Long   ' derniere ligne du bloc C ("Taux de couverture")
+Private mType As String ' type de la feuille de collecte en cours : Vie ou Non-vie
 
 Private Function NomChiffresCles() As String
     NomChiffresCles = "Chiffres clés"
@@ -65,14 +72,30 @@ End Function
 ' Mise en place : feuille Collecte + bouton Enregistrer
 ' ---------------------------------------------------------------------------------
 Public Sub InitialiserClasseur()
+    PreparerCollecte F_COLLECTE_NV, "EnregistrerNonVie"
+    PreparerCollecte F_COLLECTE_VIE, "EnregistrerVie"
+
+    FeuilleBrute F_ID & SUFFIXE_BRUT, EntetesIdentification()
+    FeuilleBrute F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations()
+    FeuilleBrute NomChiffresCles() & SUFFIXE_BRUT, EntetesChiffresCles()
+    RafraichirCopies
+    MasquerBrutes
+
+    ThisWorkbook.Worksheets(F_COLLECTE_VIE).Activate
+    MsgBox "Feuilles " & F_COLLECTE_VIE & " et " & F_COLLECTE_NV & " prêtes : collez le formulaire en A1, " & _
+        "saisissez le code société en " & CELLULE_CODE & " puis cliquez sur Enregistrer.", vbInformation, "Collecte"
+End Sub
+
+' Cree (si besoin) une feuille de collecte avec son bouton et sa cellule de code.
+Private Sub PreparerCollecte(ByVal nom As String, ByVal macro As String)
     Dim ws As Worksheet, cible As Range, btn As Object
 
     On Error Resume Next
-    Set ws = ThisWorkbook.Worksheets(F_COLLECTE)
+    Set ws = ThisWorkbook.Worksheets(nom)
     On Error GoTo 0
     If ws Is Nothing Then
         Set ws = ThisWorkbook.Worksheets.Add(Before:=ThisWorkbook.Worksheets(1))
-        ws.Name = F_COLLECTE
+        ws.Name = nom
     End If
 
     On Error Resume Next
@@ -83,35 +106,32 @@ Public Sub InitialiserClasseur()
     Set btn = ws.Buttons.Add(cible.Left, cible.Top, 120, 28)
     btn.Name = NOM_BOUTON
     btn.Caption = "Enregistrer"
-    btn.OnAction = "EnregistrerCollecte"
+    btn.OnAction = macro
 
     ws.Range(CELLULE_CODE).Offset(-1, 0).Value = "Code société"
     ws.Range(CELLULE_CODE).Offset(-1, 0).Font.Bold = True
     ws.Range(CELLULE_CODE).NumberFormat = "@"
     ws.Range(CELLULE_CODE).BorderAround xlContinuous, xlThin
-
-    FeuilleBrute F_ID & SUFFIXE_BRUT, EntetesIdentification()
-    FeuilleBrute F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations()
-    FeuilleBrute NomChiffresCles() & SUFFIXE_BRUT, EntetesChiffresCles()
-    RafraichirCopies
-    MasquerBrutes
-
-    ws.Activate
-    MsgBox "Feuille Collecte prête : collez le formulaire en A1, saisissez le code société en " & _
-        CELLULE_CODE & " puis cliquez sur Enregistrer.", vbInformation, "Collecte"
 End Sub
 
 ' ---------------------------------------------------------------------------------
 ' Bouton Enregistrer
 ' ---------------------------------------------------------------------------------
-Public Sub EnregistrerCollecte()
-    Dim ws As Worksheet, wsIdB As Worksheet, wsEpB As Worksheet, wsCcB As Worksheet
+Public Sub EnregistrerVie()
+    EnregistrerCollecte ThisWorkbook.Worksheets(F_COLLECTE_VIE), TYPE_VIE
+End Sub
+
+Public Sub EnregistrerNonVie()
+    EnregistrerCollecte ThisWorkbook.Worksheets(F_COLLECTE_NV), TYPE_NV
+End Sub
+
+Private Sub EnregistrerCollecte(ByVal ws As Worksheet, ByVal typeCollecte As String)
+    Dim wsIdB As Worksheet, wsEpB As Worksheet, wsCcB As Worksheet
     Dim erreurs As String, societe As String, code As String, idSaisie As Long, anN As Long
     Dim anciens As Collection, entrees As Collection
     Dim numErr As Long, descErr As String
 
-    Set ws = ThisWorkbook.Worksheets(F_COLLECTE)
-
+    mType = typeCollecte
     erreurs = ControlerCollecte(ws)
     If Len(erreurs) > 0 Then
         MsgBox "Enregistrement refusé :" & vbLf & erreurs, vbExclamation, "Collecte"
@@ -153,7 +173,7 @@ Public Sub EnregistrerCollecte()
     Application.ScreenUpdating = True
 
     If MsgBox(societe & " (" & code & ", " & anN & ") enregistrée." & vbLf & vbLf & _
-              "Vider la feuille Collecte pour la saisie suivante ?", vbYesNo + vbInformation, "Collecte") = vbYes Then
+              "Vider la feuille " & ws.Name & " pour la saisie suivante ?", vbYesNo + vbInformation, "Collecte") = vbYes Then
         ws.Range("A1:F" & LIGNE_MAX).ClearContents
         ws.Range(CELLULE_CODE).ClearContents
     End If
@@ -200,12 +220,12 @@ Private Function Reperer(ByVal ws As Worksheet) As Boolean
         And UCase$(Texte(ws.Cells(mC + 1, 1).Value)) = "RUBRIQUES"
 End Function
 
-' "Vie" ou "Non-vie" selon le titre du bloc B.
-Private Function TypeSociete(ByVal ws As Worksheet) As String
+' Type du formulaire d'apres le titre du bloc B : SINISTRALITE -> Non-vie, sinon Vie.
+Private Function TypeFormulaire(ByVal ws As Worksheet) As String
     If InStr(1, Texte(ws.Cells(mB, 2).Value), "SINISTRALITE", vbTextCompare) > 0 Then
-        TypeSociete = "Non-vie"
+        TypeFormulaire = TYPE_NV
     Else
-        TypeSociete = "Vie"
+        TypeFormulaire = TYPE_VIE
     End If
 End Function
 
@@ -345,6 +365,13 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
         Exit Function
     End If
 
+    ' Le formulaire colle doit correspondre a la feuille de collecte
+    If TypeFormulaire(ws) <> mType Then
+        ControlerCollecte = "- Ce formulaire est un formulaire " & TypeFormulaire(ws) & _
+            " : collez-le dans la feuille " & IIf(TypeFormulaire(ws) = TYPE_VIE, F_COLLECTE_VIE, F_COLLECTE_NV) & "."
+        Exit Function
+    End If
+
     ' Champs obligatoires
     If Len(Texte(ws.Range("B1").Value)) = 0 Then msg = msg & vbLf & "- Nom de la société vide (B1)."
     If Len(Texte(ws.Range("B2").Value)) = 0 Then msg = msg & vbLf & "- Pays vide (B2)."
@@ -418,7 +445,7 @@ Private Sub EcrireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, 
         CodeSociete(ws), _
         Texte(ws.Range("B1").Value), _
         Texte(ws.Range("B2").Value), _
-        TypeSociete(ws), _
+        mType, _
         Texte(ws.Range("B3").Value), _
         ValeurDate(ws.Range("B4").Value), _
         ValeurCapital(ws.Range("B5").Value), _
@@ -438,7 +465,7 @@ Private Sub EcrireEntrees(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal e
     code = CodeSociete(ws)
     societe = Texte(ws.Range("B1").Value)
     pays = Texte(ws.Range("B2").Value)
-    typ = TypeSociete(ws)
+    typ = mType
 
     For Each e In entrees
         Set c = e(6)
