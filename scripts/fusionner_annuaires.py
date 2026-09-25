@@ -1,28 +1,30 @@
-"""Fusionne deux editions de l'annuaire FANAF dans un classeur unique.
+"""Fusionne plusieurs editions de l'annuaire FANAF dans un classeur unique.
 
-Chaque edition couvre deux exercices (32e edition : 2022-2023 ; 33e edition :
-2023-2024). Les tables Emission&Prestations et Chiffres cles ont une ligne
-par societe, rubrique et annee, et deux colonnes de valeurs, une par edition :
-l'annee commune (2023) a donc ses deux valeurs cote a cote.
+Chaque edition couvre deux exercices (30e : 2020-2021 ; 32e : 2022-2023 ;
+33e : 2023-2024...). Les tables Emission&Prestations et Chiffres cles ont une
+ligne par societe, rubrique et annee, et une colonne de valeurs par edition :
+une annee publiee dans deux editions a donc ses deux valeurs cote a cote.
 
 Les societes sont rapprochees d'une edition a l'autre (meme pays et meme
 branche) par le nom, la date de creation, le directeur general et le capital,
 ce qui couvre les changements de nom (Atlantique -> AFG) et les noms
 illisibles du PDF 2026.
 
-Usage : python fusionner_annuaires.py ANCIENNE.pdf RECENTE.pdf sortie.xlsx
+Usage (editions de la plus ancienne a la plus recente) :
+  python fusionner_annuaires.py sortie.xlsx "30e edition=A.pdf" "32e edition=B.pdf" "33e edition=C.pdf"
 """
 import difflib
+from collections import Counter
 import re
 import sys
 from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 import extraire_annuaire as ex
 
-EDITIONS = ["32e edition", "33e edition"]
 PAYS_ALIAS = {"CONGO BRAZZAVILLE": "CONGO"}
 
 
@@ -101,44 +103,43 @@ def rapprocher(anciennes, recentes):
     return couples
 
 
-def construire(f32, f33):
-    """Liste des societes : [{'fiches': [fiche32|None, fiche33|None], 'nom': ...}]"""
-    couples = rapprocher(f32, f33)
+def construire(editions):
+    """editions : [(libelle, fiches)] de la plus ancienne a la plus recente.
+    Renvoie les societes : {'fiches': {libelle: fiche}, 'nom', 'pays', 'branche'}."""
     societes, notes = [], []
-    lies = set()
-    for j, r in enumerate(f33):
-        a = None
-        if j in couples:
-            i, s = couples[j]
-            a = f32[i]
-            lies.add(i)
-        nom = r["ident"]["Societe"]
-        if r["decode"]:
-            notes.append(("Nom illisible", f"33e edition p. {r['page']}", f"nom decode : {nom}"))
-        if r["illisible"]:
-            if a:
-                notes.append(("Nom illisible", f"33e edition p. {r['page']}",
-                              f"nom repris de la 32e edition : {a['ident']['Societe']}"))
-                nom = a["ident"]["Societe"]
+    for lib, fiches in reversed(editions):
+        # representant de chaque societe : sa fiche la plus recente
+        reps = [s["fiches"][next(iter(s["fiches"]))] for s in societes]
+        couples = rapprocher(fiches, reps)  # {indice societe: (indice fiche, score)}
+        prises = {}
+        for j, (i, _) in couples.items():
+            prises[i] = j
+        for i, f in enumerate(fiches):
+            nom = f["ident"]["Societe"]
+            if f.get("decode"):
+                notes.append(("Nom illisible", f"{lib} p. {f['page']}", f"nom decode : {nom}"))
+            if i in prises:
+                soc = societes[prises[i]]
+                if ex.cle(soc["nom"]) != ex.cle(nom) and not f["illisible"]:
+                    notes.append(("Changement de nom", f"{lib} p. {f['page']}", f"{nom} -> {soc['nom']}"))
+                soc["fiches"][lib] = f
             else:
-                nom = f"(nom illisible, 33e edition p. {r['page']})"
-                notes.append(("Nom illisible", f"33e edition p. {r['page']}", "aucune correspondance trouvee"))
-        if a and ex.cle(a["ident"]["Societe"]) != ex.cle(nom):
-            notes.append(("Changement de nom", f"32e p. {a['page']} / 33e p. {r['page']}",
-                          f"{a['ident']['Societe']} -> {nom}"))
-        societes.append({"fiches": [a, r], "nom": nom, "pays": r["ident"]["Pays"], "branche": r["branche"]})
-    for i, a in enumerate(f32):
-        if i not in lies:
-            societes.append({"fiches": [a, None], "nom": a["ident"]["Societe"], "pays": a["ident"]["Pays"],
-                             "branche": a["branche"]})
-    ordre_pays = {}
-    for s in societes:
-        ordre_pays.setdefault(s["pays"], len(ordre_pays))
+                if f["illisible"]:
+                    nom = f"(nom illisible, {lib} p. {f['page']})"
+                    notes.append(("Nom illisible", f"{lib} p. {f['page']}", "aucune correspondance trouvee"))
+                societes.append({"fiches": {lib: f}, "nom": nom, "pays": f["ident"]["Pays"], "branche": f["branche"]})
+    # nom illisible dans l'edition recente mais lisible dans une plus ancienne
+    for soc in societes:
+        if soc["nom"].startswith("(nom illisible"):
+            lisibles = [f for f in soc["fiches"].values() if not f["illisible"]]
+            if lisibles:
+                notes.append(("Nom illisible", soc["nom"], f"nom repris d'une edition anterieure : {lisibles[0]['ident']['Societe']}"))
+                soc["nom"] = lisibles[0]["ident"]["Societe"]
     societes.sort(key=lambda s: (s["pays"], s["branche"] != "Vie", ex.cle(s["nom"])))
     return societes, notes
 
 
-def ecrire(societes, notes, sortie):
+def ecrire(societes, notes, sortie, libelles):
     wb = Workbook()
     wb.remove(wb.active)
     gras = Font(bold=True)
@@ -158,28 +159,33 @@ def ecrire(societes, notes, sortie):
     idv = feuille("Identification", e_id)
     e_ep = ["No societe", "Societe", "Pays", "Branche", "Bloc", "Categorie", "Rubrique", "Mesure", "Annee"]
     e_cc = ["No societe", "Societe", "Pays", "Branche", "Rubrique", "Annee"]
-    epv = feuille("Emission&Prestations", e_ep + [f"Valeur {e} (F CFA)" for e in EDITIONS])
-    ccv = feuille("Chiffres clés", e_cc + [f"Valeur {e} (F CFA)" for e in EDITIONS])
-    epb = feuille("Emission&Prestations (brut)", e_ep + [f"Valeur {e} (milliers F CFA)" for e in EDITIONS]
-                  + [f"Source {e}" for e in EDITIONS], True)
-    ccb = feuille("Chiffres clés (brut)", e_cc + [f"Valeur {e} (milliers F CFA)" for e in EDITIONS]
-                  + [f"Source {e}" for e in EDITIONS], True)
+    ne = len(libelles)
+    epv = feuille("Emission&Prestations", e_ep + [f"Valeur {e} (F CFA)" for e in libelles])
+    ccv = feuille("Chiffres clés", e_cc + [f"Valeur {e} (F CFA)" for e in libelles])
+    epb = feuille("Emission&Prestations (brut)", e_ep + [f"Valeur {e} (milliers F CFA)" for e in libelles]
+                  + [f"Source {e}" for e in libelles], True)
+    ccb = feuille("Chiffres clés (brut)", e_cc + [f"Valeur {e} (milliers F CFA)" for e in libelles]
+                  + [f"Source {e}" for e in libelles], True)
+    col_ep = [get_column_letter(len(e_ep) + 1 + k) for k in range(ne)]
+    col_cc = [get_column_letter(len(e_cc) + 1 + k) for k in range(ne)]
 
     n_enr = 0
     for no, s in enumerate(societes, 1):
         base_soc = [no, s["nom"], s["pays"], s["branche"]]
         # Identification : une ligne par fiche (edition)
-        for k, f in enumerate(s["fiches"]):
+        for lib in libelles:
+            f = s["fiches"].get(lib)
             if f is None:
                 continue
             n_enr += 1
             i = f["ident"]
-            idv.append([n_enr, no, EDITIONS[k], s["nom"] if f["illisible"] else i["Societe"], s["pays"],
+            idv.append([n_enr, no, lib, s["nom"] if f["illisible"] else i["Societe"], s["pays"],
                         s["branche"], i["DG"] or None, ex.date_ou_texte(i["Date"]), ex.capital(i["Capital"]),
                         i["Cadres"], i["Maitrise"], i["Employes"], f["annees"][1], f"PDF p. {f['page']}"])
-        # Valeurs : cle -> [v32, v33], sources
+        # Valeurs : cle -> [valeur par edition] + [source par edition]
         lignes_ep, lignes_cc = {}, {}
-        for k, f in enumerate(s["fiches"]):
+        for k, lib in enumerate(libelles):
+            f = s["fiches"].get(lib)
             if f is None:
                 continue
             for typ, bloc, cat, rub, mes, an, v in f["entrees"]:
@@ -187,21 +193,16 @@ def ecrire(societes, notes, sortie):
                     d, cle_l = lignes_ep, (bloc, cat or None, rub, mes, an)
                 else:
                     d, cle_l = lignes_cc, (rub, an)
-                e = d.setdefault(cle_l, [None, None, None, None])
+                e = d.setdefault(cle_l, [None] * (2 * ne))
                 e[k] = v
-                e[2 + k] = f"PDF p. {f['page']}"
-        for cle_l, (v1, v2, s1, s2) in lignes_ep.items():
-            epb.append(base_soc + list(cle_l) + [v1, v2, s1, s2])
-            r = epb.max_row
-            epv.append(base_soc + list(cle_l) + [
-                f"=IF('Emission&Prestations (brut)'!{c}{r}=\"\",\"\",'Emission&Prestations (brut)'!{c}{r}*1000)"
-                for c in ("J", "K")])
-        for cle_l, (v1, v2, s1, s2) in lignes_cc.items():
-            ccb.append(base_soc + list(cle_l) + [v1, v2, s1, s2])
-            r = ccb.max_row
-            ccv.append(base_soc + list(cle_l) + [
-                f"=IF('Chiffres clés (brut)'!{c}{r}=\"\",\"\",'Chiffres clés (brut)'!{c}{r}*1000)"
-                for c in ("G", "H")])
+                e[ne + k] = f"PDF p. {f['page']}"
+        for d, wsb, wsv, cols, nomb in ((lignes_ep, epb, epv, col_ep, "Emission&Prestations (brut)"),
+                                        (lignes_cc, ccb, ccv, col_cc, "Chiffres clés (brut)")):
+            for cle_l in sorted(d, key=lambda c: (c[:-1], c[-1])):
+                wsb.append(base_soc + list(cle_l) + d[cle_l])
+                r = wsb.max_row
+                wsv.append(base_soc + list(cle_l) + [
+                    f"=IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}*1000)" for c in cols])
 
     nt = feuille("Notes", ["Type", "Reference", "Detail"])
     for n in notes:
@@ -211,11 +212,11 @@ def ecrire(societes, notes, sortie):
         c.number_format = "dd/mm/yyyy"
     for c in idv["I"][1:]:
         c.number_format = "#,##0"
-    for ws, cols in ((epv, "JK"), (ccv, "GH")):
+    for ws, cols in ((epv, col_ep), (ccv, col_cc)):
         for col in cols:
             for c in ws[col][1:]:
                 c.number_format = "#,##0"
-    for ws, cols in ((epb, "JK"), (ccb, "GH")):
+    for ws, cols in ((epb, col_ep), (ccb, col_cc)):
         for col in cols:
             for c in ws[col][1:]:
                 c.number_format = "#,##0.000"
@@ -227,29 +228,32 @@ def ecrire(societes, notes, sortie):
     wb.save(sortie)
 
 
-def main(pdf_ancien, pdf_recent, sortie):
-    f32, ign32 = ex.lire_pdf(pdf_ancien)
-    f33, ign33 = ex.lire_pdf(pdf_recent)
-    normaliser(f32)
-    normaliser(f33)
-    societes, notes = construire(f32, f33)
-    for ed, fs, ign in (("32e edition", f32, ign32), ("33e edition", f33, ign33)):
+def main(sortie, editions_pdf):
+    """editions_pdf : [(libelle, chemin du PDF)] de la plus ancienne a la plus recente."""
+    editions = []
+    notes_lecture = []
+    for lib, chemin in editions_pdf:
+        fs, ign = ex.lire_pdf(chemin)
+        normaliser(fs)
+        editions.append((lib, fs))
         if ign:
-            notes.append(("Pages non lues", ed, ", ".join(map(str, ign))))
+            notes_lecture.append(("Pages non lues", lib, ", ".join(map(str, ign))))
+        attendu = Counter(f["annees"] for f in fs).most_common(1)[0][0] if fs else None
         for f in fs:
             for c in f["controles"]:
-                notes.append(("Controle", f"{ed} p. {f['page']} {f['ident']['Societe'][:60]}", c))
-            if f["annees"] != (fs[0]["annees"] if ed == "32e edition" else (2023, 2024)):
-                notes.append(("Exercices", f"{ed} p. {f['page']} {f['ident']['Societe']}",
-                              f"fiche publiee avec les exercices {f['annees'][0]}-{f['annees'][1]}"))
-    ecrire(societes, notes, sortie)
-    deux = sum(1 for s in societes if all(s["fiches"]))
-    print(f"32e edition : {len(f32)} fiches ; 33e edition : {len(f33)} fiches")
-    print(f"{len(societes)} societes : {deux} dans les deux editions, "
-          f"{sum(1 for s in societes if s['fiches'][1] is None)} seulement 32e, "
-          f"{sum(1 for s in societes if s['fiches'][0] is None)} seulement 33e")
+                notes_lecture.append(("Controle", f"{lib} p. {f['page']} {f['ident']['Societe'][:60]}", c))
+            if f["annees"] != attendu:
+                notes_lecture.append(("Exercices", f"{lib} p. {f['page']} {f['ident']['Societe']}",
+                                      f"fiche publiee avec les exercices {f['annees'][0]}-{f['annees'][1]}"))
+    societes, notes = construire(editions)
+    notes += notes_lecture
+    libelles = [lib for lib, _ in editions_pdf]
+    ecrire(societes, notes, sortie, libelles)
+    for lib, fs in editions:
+        print(f"{lib} : {len(fs)} fiches")
+    print(f"{len(societes)} societes")
     return societes, notes
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[3])
+    main(sys.argv[1], [tuple(a.split("=", 1)) for a in sys.argv[2:]])

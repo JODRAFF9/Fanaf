@@ -275,10 +275,18 @@ def lire_fiche(page, num_page):
     # --- Bloc C ---
     ent = ls[iC] if sum(1 for m in ls[iC] if ANNEE.match(m["text"])) >= 2 else \
         next((l for l in ls[iC:iC + 2] if sum(1 for m in l if ANNEE.match(m["text"])) >= 2), None)
-    if ent is None:
+    centres = [centre(m) for m in ent if ANNEE.match(m["text"])][:2] if ent else None
+    if centres is None:
+        # en-tete incomplet (une seule annee) : colonnes deduites de la position des montants,
+        # separees au plus grand ecart entre les centres
+        xs = sorted(centre(m) for l in ls[iC + 1:iC + 12] for m in decouper(l, 260)[1])
+        if len(xs) >= 4:
+            k = max(range(1, len(xs)), key=lambda q: xs[q] - xs[q - 1])
+            centres = [sum(xs[:k]) / k, sum(xs[k:]) / (len(xs) - k)]
+            controles.append("Chiffres cles : en-tete incomplet, colonnes deduites des montants")
+    if centres is None:
         controles.append("Chiffres cles : en-tete introuvable")
     else:
-        centres = [centre(m) for m in ent if ANNEE.match(m["text"])][:2]
         vals_c = {}
         for l in ls[iC + 1:]:
             lab, mont = decouper(l, 260)
