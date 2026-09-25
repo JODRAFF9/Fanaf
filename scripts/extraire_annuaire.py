@@ -43,7 +43,10 @@ RUBRIQUES_C = ["Produits financiers nets", "Commissions", "Autres charges de l'e
 
 
 # Libelles tronques ou alteres dans le PDF (p. 86 : "Actifs" ; p. 107 : "U°E")
-ALIAS = {"actifs": "Actifs admis", "ue": "Accidents corporels et maladie"}
+ALIAS = {"actifs": "Actifs admis", "ue": "Accidents corporels et maladie",
+         # anciens libelles, verifies sur les valeurs 2020 (formulaires = 30e edition)
+         "frais generaux": "Autres charges de l'exercice",
+         "fonds propres nets": "Total des capitaux propres et réserves"}
 
 
 def cle(s):

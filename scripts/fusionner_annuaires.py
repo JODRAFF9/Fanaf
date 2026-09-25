@@ -10,10 +10,13 @@ branche) par le nom, la date de creation, le directeur general et le capital,
 ce qui couvre les changements de nom (Atlantique -> AFG) et les noms
 illisibles du PDF 2026.
 
-Usage (editions de la plus ancienne a la plus recente) :
-  python fusionner_annuaires.py sortie.xlsx "30e edition=A.pdf" "32e edition=B.pdf" "33e edition=C.pdf"
+Usage (sources de la plus ancienne a la plus recente) ; une source est un PDF
+d'annuaire ou une liste de dossiers de formulaires Excel separes par ";" :
+  python fusionner_annuaires.py sortie.xlsx "Formulaires 2020=Stes vie 2020;Stes non vie 2020" \
+      "30e edition=A.pdf" "32e edition=B.pdf" "33e edition=C.pdf"
 """
 import difflib
+import os
 from collections import Counter
 import re
 import sys
@@ -24,6 +27,12 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 import extraire_annuaire as ex
+import lire_formulaires_xls as lx
+
+
+def ref(f):
+    """Reference de la fiche dans sa source : page du PDF ou classeur/feuille."""
+    return f.get("source") or f"PDF p. {f['page']}"
 
 PAYS_ALIAS = {"CONGO BRAZZAVILLE": "CONGO"}
 
@@ -117,16 +126,16 @@ def construire(editions):
         for i, f in enumerate(fiches):
             nom = f["ident"]["Societe"]
             if f.get("decode"):
-                notes.append(("Nom illisible", f"{lib} p. {f['page']}", f"nom decode : {nom}"))
+                notes.append(("Nom illisible", f"{lib} : {ref(f)}", f"nom decode : {nom}"))
             if i in prises:
                 soc = societes[prises[i]]
                 if ex.cle(soc["nom"]) != ex.cle(nom) and not f["illisible"]:
-                    notes.append(("Changement de nom", f"{lib} p. {f['page']}", f"{nom} -> {soc['nom']}"))
+                    notes.append(("Changement de nom", f"{lib} : {ref(f)}", f"{nom} -> {soc['nom']}"))
                 soc["fiches"][lib] = f
             else:
                 if f["illisible"]:
-                    nom = f"(nom illisible, {lib} p. {f['page']})"
-                    notes.append(("Nom illisible", f"{lib} p. {f['page']}", "aucune correspondance trouvee"))
+                    nom = f"(nom illisible, {lib} : {ref(f)})"
+                    notes.append(("Nom illisible", f"{lib} : {ref(f)}", "aucune correspondance trouvee"))
                 societes.append({"fiches": {lib: f}, "nom": nom, "pays": f["ident"]["Pays"], "branche": f["branche"]})
     # nom illisible dans l'edition recente mais lisible dans une plus ancienne
     for soc in societes:
@@ -181,7 +190,7 @@ def ecrire(societes, notes, sortie, libelles):
             i = f["ident"]
             idv.append([n_enr, no, lib, s["nom"] if f["illisible"] else i["Societe"], s["pays"],
                         s["branche"], i["DG"] or None, ex.date_ou_texte(i["Date"]), ex.capital(i["Capital"]),
-                        i["Cadres"], i["Maitrise"], i["Employes"], f["annees"][1], f"PDF p. {f['page']}"])
+                        i["Cadres"], i["Maitrise"], i["Employes"], f["annees"][1], ref(f)])
         # Valeurs : cle -> [valeur par edition] + [source par edition]
         lignes_ep, lignes_cc = {}, {}
         for k, lib in enumerate(libelles):
@@ -195,7 +204,7 @@ def ecrire(societes, notes, sortie, libelles):
                     d, cle_l = lignes_cc, (rub, an)
                 e = d.setdefault(cle_l, [None] * (2 * ne))
                 e[k] = v
-                e[ne + k] = f"PDF p. {f['page']}"
+                e[ne + k] = ref(f)
         for d, wsb, wsv, cols, nomb in ((lignes_ep, epb, epv, col_ep, "Emission&Prestations (brut)"),
                                         (lignes_cc, ccb, ccv, col_cc, "Chiffres clés (brut)")):
             for cle_l in sorted(d, key=lambda c: (c[:-1], c[-1])):
@@ -233,17 +242,20 @@ def main(sortie, editions_pdf):
     editions = []
     notes_lecture = []
     for lib, chemin in editions_pdf:
-        fs, ign = ex.lire_pdf(chemin)
+        if ";" in chemin or os.path.isdir(chemin):
+            fs, ign = lx.lire_dossiers([c for c in chemin.split(";") if c])  # formulaires Excel
+        else:
+            fs, ign = ex.lire_pdf(chemin)
         normaliser(fs)
         editions.append((lib, fs))
         if ign:
-            notes_lecture.append(("Pages non lues", lib, ", ".join(map(str, ign))))
+            notes_lecture.append(("Non lues", lib, ", ".join(map(str, ign))))
         attendu = Counter(f["annees"] for f in fs).most_common(1)[0][0] if fs else None
         for f in fs:
             for c in f["controles"]:
-                notes_lecture.append(("Controle", f"{lib} p. {f['page']} {f['ident']['Societe'][:60]}", c))
+                notes_lecture.append(("Controle", f"{lib} : {ref(f)} {f['ident']['Societe'][:60]}", c))
             if f["annees"] != attendu:
-                notes_lecture.append(("Exercices", f"{lib} p. {f['page']} {f['ident']['Societe']}",
+                notes_lecture.append(("Exercices", f"{lib} : {ref(f)} {f['ident']['Societe']}",
                                       f"fiche publiee avec les exercices {f['annees'][0]}-{f['annees'][1]}"))
     societes, notes = construire(editions)
     notes += notes_lecture
