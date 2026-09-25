@@ -28,6 +28,7 @@ from openpyxl.utils import get_column_letter
 
 import extraire_annuaire as ex
 import lire_formulaires_xls as lx
+import verifier_extraction as vx
 
 
 def ref(f):
@@ -148,7 +149,7 @@ def construire(editions):
     return societes, notes
 
 
-def ecrire(societes, notes, sortie, libelles):
+def ecrire(societes, notes, sortie, libelles, bilans=None):
     wb = Workbook()
     wb.remove(wb.active)
     gras = Font(bold=True)
@@ -213,6 +214,35 @@ def ecrire(societes, notes, sortie, libelles):
                 wsv.append(base_soc + list(cle_l) + [
                     f"=IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}*1000)" for c in cols])
 
+    # --- Verification : bilan des tests de recalcul et concordance entre sources ---
+    vf = feuille("Verification", ["Controle", "Source", "Resultat", "Detail"])
+    for lib, nb_fiches, tot, ind, som, tests, echecs in (bilans or []):
+        vf.append(["Fiches lues", lib, nb_fiches, ""])
+        vf.append(["Valeurs non nulles", lib, tot, ""])
+        vf.append(["Verifiees individuellement", lib, f"{100 * ind / tot:.1f} %",
+                   f"{ind} valeurs recalculees a partir de l'evolution ou du ratio CS/PA imprimes"])
+        vf.append(["Verifiees par un total", lib, f"{100 * som / tot:.1f} %",
+                   f"{som} valeurs dont la somme redonne le total imprime"])
+        vf.append(["Non verifiees", lib, f"{100 * (tot - ind - som) / tot:.1f} %",
+                   f"{tot - ind - som} valeurs sans controle possible (valeur isolee, une seule annee...)"])
+        vf.append(["Tests de recalcul en echec", lib, f"{len(echecs)} / {tests}",
+                   "incoherences de la source (ratio ou evolution imprime faux), detail ci-dessous"])
+    for nomb, wsb, cols in (("Emission&Prestations", epb, col_ep), ("Chiffres cles", ccb, col_cc)):
+        idx = [c.column - 1 for c in wsb[1] if c.column_letter in cols]
+        deux = egal = 0
+        for row in wsb.iter_rows(min_row=2, values_only=True):
+            vs = [row[i] for i in idx if row[i] is not None]
+            if len(vs) >= 2:
+                deux += 1
+                egal += max(vs) - min(vs) <= max(1, 0.001 * max(abs(x) for x in vs))
+        if deux:
+            vf.append([f"Concordance entre sources ({nomb})", "annees publiees deux fois",
+                       f"{100 * egal / deux:.1f} %", f"{egal} valeurs identiques sur {deux} "
+                       "(les ecarts restants sont des revisions entre deux publications)"])
+    for lib, nb_fiches, tot, ind, som, tests, echecs in (bilans or []):
+        for src, soc, x in echecs:
+            vf.append(["Echec de recalcul", lib, f"{src} {soc}", x])
+
     nt = feuille("Notes", ["Type", "Reference", "Detail"])
     for n in notes:
         nt.append(list(n))
@@ -260,7 +290,11 @@ def main(sortie, editions_pdf):
     societes, notes = construire(editions)
     notes += notes_lecture
     libelles = [lib for lib, _ in editions_pdf]
-    ecrire(societes, notes, sortie, libelles)
+    bilans = []
+    for lib, fs in editions:
+        tot, ind, som, tests, echecs = vx.bilan(fs)
+        bilans.append((lib, len(fs), tot, ind, som, tests, echecs))
+    ecrire(societes, notes, sortie, libelles, bilans)
     for lib, fs in editions:
         print(f"{lib} : {len(fs)} fiches")
     print(f"{len(societes)} societes")

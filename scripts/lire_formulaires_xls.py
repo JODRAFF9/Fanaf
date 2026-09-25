@@ -90,6 +90,19 @@ def lire_feuille(g, datemode, source):
              "Cadres": nombre(cellule(g, 5, 3)), "Maitrise": nombre(cellule(g, 6, 3)),
              "Employes": nombre(cellule(g, 7, 3))}
     entrees, controles = [], []
+    verifs = {"individuel": set(), "somme": set(), "echecs": [], "tests": 0}
+    primes_acquises = {}
+
+    def tester(cles, imprime, a, b, libelle_test):
+        """imprime : evolution ou ratio stocke dans le classeur (en decimal)."""
+        verifs["tests"] += 1
+        calcule = (b / a - 1) if libelle_test == "evolution" else b / a
+        if abs(calcule - imprime) <= 1e-3 * max(1, abs(calcule)):
+            verifs["individuel"].update(cles)
+        else:
+            verifs["echecs"].append(f"{libelle_test} {' / '.join(map(str, cles[0][1:5]))} : classeur "
+                                    f"{imprime * 100:.1f} %, recalcule {calcule * 100:.1f} %")
+
     if any(isinstance(v, float) and v > 3000 for v in brut_annees):
         controles.append(f"annees saisies {int(brut_annees[0])} et {int(brut_annees[1])}, lues {an1} et {an2}")
 
@@ -109,7 +122,7 @@ def lire_feuille(g, datemode, source):
             mesures, debut, categorie = [(m, 1, 3)], t + 2, ""
         reference = ex.BRANCHES_NV if branche == "Non-vie" else ex.RUBRIQUES_VIE
         n_vie = 0
-        sommes, totaux = {}, {}
+        sommes, totaux, membres = {}, {}, {}
         for r in range(debut, fin):
             lab = ex.libelle(texte(cellule(g, r, 0)))
             if not lab:
@@ -134,17 +147,35 @@ def lire_feuille(g, datemode, source):
             if lab == "Contrats en cas de vie" and categorie == "Collectives":
                 lab = "Contrat en cas de vie"
             cat = "Acceptations" if lab == "Acceptations" else categorie
+            vals = []
             for mes, c1, c2 in mesures:
                 for an, c in ((annees[0], c1), (annees[1], c2)):
                     v = nombre(cellule(g, r, c))
+                    vals.append(v)
                     entrees.append(("EP", nom_bloc, cat, lab, mes, an, v))
                     k = ("acc", mes, an) if cat == "Acceptations" else (mes, an)
                     sommes[k] = sommes.get(k, 0) + (v or 0)
+                    membres.setdefault(k, []).append(("EP", nom_bloc, cat, lab, mes, an))
+                    if mes == "Primes acquises (PA)":
+                        primes_acquises[(lab, an)] = v
+            cles_l = [("EP", nom_bloc, cat, lab, mesures[0][0], an) for an in annees]
+            if branche == "Vie":
+                evo = nombre(cellule(g, r, 5))
+                if vals[0] and vals[1] and evo is not None:
+                    tester(cles_l, evo, vals[0], vals[1], "evolution")
+            elif nom_bloc == "Sinistralite":
+                for k, c in ((0, 2), (1, 4)):
+                    ratio, pa = nombre(cellule(g, r, c)), primes_acquises.get((lab, annees[k]))
+                    if vals[k] and pa and ratio is not None:
+                        tester([cles_l[k], ("EP", "Emissions", cat, lab, "Primes acquises (PA)", annees[k])],
+                               ratio, pa, vals[k], "ratio CS/PA")
         for mes, _, _ in mesures:
             for an in annees:
                 s, acc = sommes.get((mes, an), 0), sommes.get(("acc", mes, an), 0)
                 t_ = totaux.get(("total", mes, an))
                 e_ = totaux.get(("ensemble", mes, an))
+                if t_ is not None and abs(s - t_) <= 2 and s:
+                    verifs["somme"].update(membres.get((mes, an), []))
                 if t_ is not None and abs(s - t_) > 2:
                     controles.append(f"{nom_bloc} / {mes} / {an} : somme des branches {s:,.0f} "
                                      f"<> total affaires directes {t_:,.0f}".replace(",", " "))
@@ -166,6 +197,9 @@ def lire_feuille(g, datemode, source):
         lab = ex.canonique(lab, ex.RUBRIQUES_C)
         v = [nombre(cellule(g, r, 2)), nombre(cellule(g, r, 3))]
         vals_c[lab] = v
+        evo = nombre(cellule(g, r, 4))
+        if v[0] and v[1] and evo is not None and lab != "Autres actifs":
+            tester([("CC", "", "", lab, "", an) for an in annees], evo, v[0], v[1], "evolution")
         if lab == "Autres actifs":
             continue
         for k, an in enumerate(annees):
@@ -178,7 +212,7 @@ def lire_feuille(g, datemode, source):
                                  f"{aa[k] - liq[k]:,.0f} <> autres actifs {au[k]:,.0f}".replace(",", " "))
 
     return {"page": source, "source": source, "page_imprimee": "", "branche": branche, "annees": annees,
-            "ident": ident, "entrees": entrees, "controles": controles}
+            "ident": ident, "entrees": entrees, "controles": controles, "verifs": verifs}
 
 
 def lire_dossiers(dossiers):

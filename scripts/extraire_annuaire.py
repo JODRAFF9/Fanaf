@@ -145,6 +145,22 @@ def affecter(montants, centres):
     return res
 
 
+def pourcents(ligne, x_min=200):
+    """Pourcentages imprimes sur la ligne (parts, evolutions, ratios), de gauche a droite."""
+    res = []
+    for m in ligne:
+        t = m["text"].replace("%", "").strip()
+        if m["x0"] >= x_min and POURCENT.search(m["text"]) and valeur(t) is not None:
+            res.append(valeur(t))
+    return res
+
+
+def ecart_admis(a, b):
+    """Tolerance pour comparer un pourcentage imprime (arrondi a 0,1) a b/a*100 calcule
+    sur des montants eux-memes arrondis au millier."""
+    return 0.051 + 100 * abs(b / a) * (0.5 / abs(a) + 0.5 / abs(b)) + 1e-9
+
+
 def texte_apres(ligne, x_min=150):
     return " ".join(m["text"] for m in ligne if m["x0"] >= x_min).strip()
 
@@ -202,6 +218,19 @@ def lire_fiche(page, num_page):
         return None
 
     entrees, controles = [], []
+    # Verifications : chaque valeur est recalculee a partir des colonnes calculees du PDF
+    verifs = {"individuel": set(), "somme": set(), "echecs": [], "tests": 0}
+    primes_acquises = {}
+
+    def tester(cles, imprime, a, b, libelle_test):
+        verifs["tests"] += 1
+        calcule = (b / a - 1) * 100 if libelle_test == "evolution" else b / a * 100
+        if abs(calcule - imprime) <= ecart_admis(a, b):
+            verifs["individuel"].update(cles)
+        else:
+            verifs["echecs"].append(f"{libelle_test} {' / '.join(map(str, cles[0][1:5]))} : imprime "
+                                    f"{imprime:.1f} %, recalcule {calcule:.1f} % (a partir de {a:,.0f} et "
+                                    f"{b:,.0f})".replace(",", " "))
 
     def bloc_ab(i0, i1, nom_bloc):
         blk = ls[i0 + 1:i1]
@@ -232,7 +261,7 @@ def lire_fiche(page, num_page):
         reference = BRANCHES_NV if branche == "Non-vie" else RUBRIQUES_VIE
         categorie = "Affaires directes" if branche == "Non-vie" else ""
         n_vie = 0
-        sommes, totaux = {}, {}
+        sommes, totaux, membres = {}, {}, {}
         for l in blk:
             lab, mont = decouper(l, 250 if branche == "Non-vie" else 215)
             seul = " ".join(m["text"] for m in l)
@@ -260,11 +289,28 @@ def lire_fiche(page, num_page):
                 entrees.append(("EP", nom_bloc, cat, lab, mes, an, v))
                 k = ("acc", mes, an) if cat == "Acceptations" else (mes, an)
                 sommes[k] = sommes.get(k, 0) + (v or 0)
+                membres.setdefault(k, []).append(("EP", nom_bloc, cat, lab, mes, an))
+                if mes == "Primes acquises (PA)":
+                    primes_acquises[(lab, an)] = v
+            pc = pourcents(l)
+            cles_l = [("EP", nom_bloc, cat, lab, mes, an) for mes, an in cols]
+            if branche == "Vie" and vals[0] and vals[1] and len(pc) == 3:
+                tester(cles_l, pc[2], vals[0], vals[1], "evolution")
+            elif branche == "Non-vie" and nom_bloc == "Sinistralite":
+                non_nuls = [k for k in range(2) if vals[k]]
+                if len(pc) == len(non_nuls):
+                    for k, p_ in zip(non_nuls, pc):
+                        pa = primes_acquises.get((lab, annees[k]))
+                        if pa:
+                            tester([cles_l[k], ("EP", "Emissions", cat, lab, "Primes acquises (PA)", annees[k])],
+                                   p_, pa, vals[k], "ratio CS/PA")
         for (mes, an) in cols:
             s = sommes.get((mes, an), 0)
             t = totaux.get(("total", mes, an))
             e = totaux.get(("ensemble", mes, an))
             acc = sommes.get(("acc", mes, an), 0)
+            if t is not None and abs(s - t) <= 2 and s:
+                verifs["somme"].update(membres.get((mes, an), []))
             if t is not None and abs(s - t) > 2:
                 controles.append(f"{nom_bloc} / {mes} / {an} : somme des branches {s:,.0f} "
                                  f"<> total affaires directes {t:,.0f}".replace(",", " "))
@@ -300,6 +346,9 @@ def lire_fiche(page, num_page):
             lab = canonique(lab, RUBRIQUES_C)
             v = affecter(mont, centres)
             vals_c[lab] = v
+            pc = pourcents(l, 260)
+            if v[0] and v[1] and pc and lab != "Autres actifs":
+                tester([("CC", "", "", lab, "", an) for an in annees], pc[-1], v[0], v[1], "evolution")
             if lab == "Autres actifs":
                 continue
             for k, an in enumerate(annees):
@@ -313,7 +362,8 @@ def lire_fiche(page, num_page):
 
     return {"page": num_page, "page_imprimee": next((t.strip(" -") for t in txt[::-1]
                                                      if re.fullmatch(r"-\s*\d+\s*-", t.strip())), ""),
-            "branche": branche, "annees": annees, "ident": ident, "entrees": entrees, "controles": controles}
+            "branche": branche, "annees": annees, "ident": ident, "entrees": entrees, "controles": controles,
+            "verifs": verifs}
 
 
 def date_ou_texte(s):
