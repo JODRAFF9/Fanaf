@@ -1,10 +1,11 @@
 Attribute VB_Name = "ModConsolidation"
 Option Explicit
 
-' Collecte des formulaires au format "Modele.xlsx" (montants en milliers de F CFA).
+' Collecte des formulaires FANAF, vie et non-vie (montants en milliers de F CFA).
 '
 ' Utilisation :
-'   1. Lancer une fois InitialiserClasseur : cree la feuille Collecte et son bouton Enregistrer.
+'   1. Lancer une fois InitialiserClasseur : cree la feuille Collecte, son bouton
+'      Enregistrer (H2) et la cellule Code société (H5).
 '   2. Copier le formulaire (colonnes A a F) et le coller en A1 de la feuille Collecte,
 '      puis saisir le code societe en H5 (le meme code chaque annee pour une societe).
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
@@ -17,14 +18,22 @@ Option Explicit
 '
 ' Chaque table commence par une colonne Clé, unique par ligne, pour RECHERCHEV :
 '   Identification       : Code|Annee
-'   Emission&Prestations : Code|Bloc|Categorie|Rubrique|Annee
+'   Emission&Prestations : Code|Bloc|Categorie|Rubrique|Mesure|Annee
 '   Chiffres clés        : Code|Rubrique|Annee
 ' Le code societe (ex. BJ-AFGV) reste stable quand la raison sociale change.
 ' Les ratios et agregats ne sont pas stockes : ils se calculent dans les etudes.
 '
-' Les blocs sont reperes par leurs titres (A - EMISSIONS, B - PRESTATIONS, C - AUTRES
-' CHIFFRES) et non par des adresses fixes : le bloc C est lu ligne a ligne jusqu'a
-' "Taux de couverture", ce qui absorbe l'ajout de rubriques (ex. "Resultats au Bilan").
+' Lecture du formulaire, sans adresses fixes :
+'   - les blocs sont reperes par leurs titres en colonne B :
+'       A - EMISSIONS, B - PRESTATIONS (vie) ou B - SINISTRALITE (non-vie), C - AUTRES CHIFFRES
+'   - la ligne "Branches" porte les annees : N-1 en colonne B, N en colonne D
+'   - blocs A et B :
+'       vie     : un montant par annee (N-1 en B, N en D)
+'       non-vie : une ligne de sous-en-tetes donne deux mesures par annee
+'                 (N-1 en B et C, N en D et E) ; les ratios ("CS / PA") sont ignores
+'       les lignes "Assurances ..." donnent la categorie ; Total et Ensemble sont ignores
+'   - bloc C : lu ligne a ligne jusqu'a "Taux de couverture" ;
+'       Autres actifs et Taux de couverture (formules) sont ignores
 '
 ' Fichier encodé en Windows-1252 (ANSI), l'encodage attendu par l'éditeur VBA.
 
@@ -36,15 +45,15 @@ Private Const NOM_BOUTON As String = "btnEnregistrer"
 Private Const CELLULE_CODE As String = "H5"   ' code societe, hors du bloc colle (A:F)
 
 ' Derniere ligne examinee sur la feuille Collecte.
-Private Const LIGNE_MAX As Long = 120
+Private Const LIGNE_MAX As Long = 150
 
-' Decalages des lignes de saisie par rapport au titre d'un bloc A ou B
-' (titre en ligne 9 -> saisies en 13-18, 20-25 et 27 dans le modele).
-Private Const DECALAGES_AB As String = "4,5,6,7,8,9,11,12,13,14,15,16,18"
+' Tables de destination d'une entree lue
+Private Const T_EP As Long = 2
+Private Const T_CC As Long = 3
 
 ' Position des blocs dans la feuille Collecte, renseignee par Reperer.
 Private mA As Long      ' ligne du titre "A - EMISSIONS NETTES"
-Private mB As Long      ' ligne du titre "B - PRESTATIONS VERSEES"
+Private mB As Long      ' ligne du titre "B - PRESTATIONS VERSEES" ou "B - SINISTRALITE"
 Private mC As Long      ' ligne du titre "C - AUTRES CHIFFRES CLES"
 Private mFinC As Long   ' derniere ligne du bloc C ("Taux de couverture")
 
@@ -88,8 +97,8 @@ Public Sub InitialiserClasseur()
     MasquerBrutes
 
     ws.Activate
-    MsgBox "Feuille Collecte prête : collez le formulaire en A1 puis cliquez sur Enregistrer.", _
-        vbInformation, "Collecte"
+    MsgBox "Feuille Collecte prête : collez le formulaire en A1, saisissez le code société en " & _
+        CELLULE_CODE & " puis cliquez sur Enregistrer.", vbInformation, "Collecte"
 End Sub
 
 ' ---------------------------------------------------------------------------------
@@ -98,7 +107,7 @@ End Sub
 Public Sub EnregistrerCollecte()
     Dim ws As Worksheet, wsIdB As Worksheet, wsEpB As Worksheet, wsCcB As Worksheet
     Dim erreurs As String, societe As String, code As String, idSaisie As Long, anN As Long
-    Dim anciens As Collection
+    Dim anciens As Collection, entrees As Collection
     Dim numErr As Long, descErr As String
 
     Set ws = ThisWorkbook.Worksheets(F_COLLECTE)
@@ -134,9 +143,9 @@ Public Sub EnregistrerCollecte()
     End If
 
     idSaisie = Application.WorksheetFunction.Max(wsIdB.Columns(1)) + 1
-    LireIdentification ws, idSaisie, wsIdB
-    LireEmissionsPrestations ws, idSaisie, wsEpB
-    LireChiffresCles ws, idSaisie, wsCcB
+    Set entrees = LireEntrees(ws)
+    EcrireIdentification ws, idSaisie, wsIdB
+    EcrireEntrees ws, idSaisie, entrees, wsEpB, wsCcB
 
     RafraichirCopies
     MasquerBrutes
@@ -158,11 +167,11 @@ Erreur:
 End Sub
 
 ' ---------------------------------------------------------------------------------
-' Reperage des blocs et controles de la feuille Collecte
+' Reperage des blocs
 ' ---------------------------------------------------------------------------------
 
 ' Repere les titres des blocs et la fin du bloc C. Renvoie False si la mise en page
-' ne correspond pas au modele.
+' ne correspond pas a un formulaire FANAF.
 Private Function Reperer(ByVal ws As Worksheet) As Boolean
     Dim r As Long, t As String
 
@@ -170,7 +179,8 @@ Private Function Reperer(ByVal ws As Worksheet) As Boolean
     For r = 1 To LIGNE_MAX
         t = Texte(ws.Cells(r, 2).Value)
         If mA = 0 And InStr(1, t, "EMISSIONS", vbTextCompare) > 0 Then mA = r
-        If mB = 0 And InStr(1, t, "PRESTATIONS", vbTextCompare) > 0 Then mB = r
+        If mB = 0 And (InStr(1, t, "PRESTATIONS", vbTextCompare) > 0 _
+                    Or InStr(1, t, "SINISTRALITE", vbTextCompare) > 0) Then mB = r
         If mC = 0 And InStr(1, t, "AUTRES CHIFFRES", vbTextCompare) > 0 Then mC = r
     Next r
     If mA = 0 Or mB = 0 Or mC = 0 Then Exit Function
@@ -184,10 +194,50 @@ Private Function Reperer(ByVal ws As Worksheet) As Boolean
     Next r
 
     Reperer = UCase$(Texte(ws.Range("A1").Value)) = "NOM DE LA SOCIETE" _
-        And mB = mA + 20 And mC = mB + 20 And mFinC > mC + 1 _
+        And mA < mB And mB < mC And mFinC > mC + 1 _
         And UCase$(Texte(ws.Cells(mA + 1, 1).Value)) = "BRANCHES" _
         And UCase$(Texte(ws.Cells(mB + 1, 1).Value)) = "BRANCHES" _
         And UCase$(Texte(ws.Cells(mC + 1, 1).Value)) = "RUBRIQUES"
+End Function
+
+' "Vie" ou "Non-vie" selon le titre du bloc B.
+Private Function TypeSociete(ByVal ws As Worksheet) As String
+    If InStr(1, Texte(ws.Cells(mB, 2).Value), "SINISTRALITE", vbTextCompare) > 0 Then
+        TypeSociete = "Non-vie"
+    Else
+        TypeSociete = "Vie"
+    End If
+End Function
+
+Private Function NomBloc(ByVal titre As String) As String
+    If InStr(1, titre, "EMISSIONS", vbTextCompare) > 0 Then
+        NomBloc = "Émissions"
+    ElseIf InStr(1, titre, "PRESTATIONS", vbTextCompare) > 0 Then
+        NomBloc = "Prestations"
+    ElseIf InStr(1, titre, "SINISTRALITE", vbTextCompare) > 0 Then
+        NomBloc = "Sinistralité"
+    Else
+        NomBloc = titre
+    End If
+End Function
+
+' Mesure unique d'un bloc vie, d'apres son titre.
+Private Function MesureParDefaut(ByVal titre As String) As String
+    If InStr(1, titre, "EMISSIONS", vbTextCompare) > 0 Then
+        MesureParDefaut = "Émissions nettes"
+    ElseIf InStr(1, titre, "PRESTATIONS", vbTextCompare) > 0 Then
+        MesureParDefaut = "Prestations versées"
+    Else
+        MesureParDefaut = "Montant"
+    End If
+End Function
+
+' Libelle de mesure lu dans la ligne de sous-en-tetes d'un bloc non-vie.
+Private Function NomMesure(ByVal v As Variant) As String
+    Dim s As String
+    s = Texte(v)
+    If StrComp(s, "(CS)", vbTextCompare) = 0 Then s = "Charges de sinistres (CS)"
+    NomMesure = s
 End Function
 
 ' Code societe saisi en H5, en majuscules et sans espaces superflus.
@@ -205,30 +255,93 @@ Private Function EstDerivee(ByVal rubrique As String) As Boolean
         Or InStr(1, rubrique, "Taux de couverture", vbTextCompare) > 0
 End Function
 
-' Toutes les cellules de saisie chiffree, selon la position des blocs.
-Private Function CellulesSaisie(ByVal ws As Worksheet) As Range
-    Dim res As Range, d As Variant, r As Long
+' ---------------------------------------------------------------------------------
+' Entrees du formulaire : une par valeur saisie
+'   Array(table, bloc, categorie, rubrique, mesure, annee, cellule)
+' ---------------------------------------------------------------------------------
+Private Function LireEntrees(ByVal ws As Worksheet) As Collection
+    Dim res As New Collection, r As Long, anN1 As Long, rubrique As String
 
-    Set res = ws.Range("D6:D8")
-    For Each d In Split(DECALAGES_AB, ",")
-        Set res = Union(res, ws.Cells(mA + CLng(d), 2), ws.Cells(mA + CLng(d), 4), _
-                             ws.Cells(mB + CLng(d), 2), ws.Cells(mB + CLng(d), 4))
-    Next d
+    anN1 = AnneeN1(ws)
+    AjouterEntreesBloc ws, mA, mB - 1, anN1, res
+    AjouterEntreesBloc ws, mB, mC - 1, anN1, res
+
     For r = mC + 2 To mFinC
-        If Not EstDerivee(Libelle(ws.Cells(r, 1).Value)) Then
-            Set res = Union(res, ws.Cells(r, 3), ws.Cells(r, 4))
+        rubrique = Libelle(ws.Cells(r, 1).Value)
+        If Not EstDerivee(rubrique) Then
+            res.Add Array(T_CC, "", "", rubrique, "", anN1, ws.Cells(r, 3))
+            res.Add Array(T_CC, "", "", rubrique, "", anN1 + 1, ws.Cells(r, 4))
         End If
     Next r
-    Set CellulesSaisie = res
+    Set LireEntrees = res
 End Function
 
-' Renvoie "" si tout est correct, sinon la liste des anomalies.
+' Bloc A ou B, du titre (ligne t) jusqu'a la ligne fin.
+Private Sub AjouterEntreesBloc(ByVal ws As Worksheet, ByVal t As Long, ByVal fin As Long, _
+                               ByVal anN1 As Long, ByVal res As Collection)
+    Dim bloc As String, categorie As String, rubrique As String, titre As String
+    Dim mesures As New Collection, m As Variant
+    Dim debut As Long, r As Long, c As Long, vide As Boolean
+
+    titre = Texte(ws.Cells(t, 2).Value)
+    bloc = NomBloc(titre)
+
+    ' Sous-en-tetes (non-vie) : colonne A vide et libelle texte en colonne B
+    If Len(Texte(ws.Cells(t + 2, 1).Value)) = 0 And Len(Texte(ws.Cells(t + 2, 2).Value)) > 0 _
+       And Not IsNumeric(ws.Cells(t + 2, 2).Value) Then
+        ' mesure 1 : N-1 en B, N en D ; mesure 2 : N-1 en C, N en E ; ratios ignores
+        If InStr(ws.Cells(t + 2, 2).Value, "/") = 0 Then mesures.Add Array(NomMesure(ws.Cells(t + 2, 2).Value), 2, 4)
+        If InStr(ws.Cells(t + 2, 3).Value, "/") = 0 Then mesures.Add Array(NomMesure(ws.Cells(t + 2, 3).Value), 3, 5)
+        debut = t + 3
+        categorie = "Affaires directes"
+    Else
+        mesures.Add Array(MesureParDefaut(titre), 2, 4)
+        debut = t + 2
+        categorie = ""
+    End If
+
+    For r = debut To fin
+        rubrique = Libelle(ws.Cells(r, 1).Value)
+        If Len(rubrique) = 0 Then GoTo Suivante
+
+        vide = True
+        For c = 2 To 6
+            If Len(Texte(ws.Cells(r, c).Value)) > 0 Then vide = False
+        Next c
+
+        If vide And StrComp(Left$(rubrique, 11), "Assurances ", vbTextCompare) = 0 Then
+            ' Ligne de categorie : "Assurances individuelles" -> "Individuelles"
+            categorie = Mid$(rubrique, 12)
+            If Len(categorie) > 0 Then categorie = UCase$(Left$(categorie, 1)) & Mid$(categorie, 2)
+        ElseIf StrComp(Left$(rubrique, 5), "Total", vbTextCompare) = 0 _
+            Or StrComp(rubrique, "Ensemble", vbTextCompare) = 0 Then
+            ' Agregats : recalcules dans les etudes
+        Else
+            For Each m In mesures
+                If StrComp(rubrique, "Acceptations", vbTextCompare) = 0 Then
+                    res.Add Array(T_EP, bloc, "Acceptations", rubrique, m(0), anN1, ws.Cells(r, m(1)))
+                    res.Add Array(T_EP, bloc, "Acceptations", rubrique, m(0), anN1 + 1, ws.Cells(r, m(2)))
+                Else
+                    res.Add Array(T_EP, bloc, categorie, rubrique, m(0), anN1, ws.Cells(r, m(1)))
+                    res.Add Array(T_EP, bloc, categorie, rubrique, m(0), anN1 + 1, ws.Cells(r, m(2)))
+                End If
+            Next m
+        End If
+Suivante:
+    Next r
+End Sub
+
+' ---------------------------------------------------------------------------------
+' Controles de la feuille Collecte. Renvoie "" si tout est correct.
+' ---------------------------------------------------------------------------------
 Private Function ControlerCollecte(ByVal ws As Worksheet) As String
-    Dim msg As String, c As Range, invalides As String, v As Variant
+    Dim msg As String, invalides As String, v As Variant, e As Variant, c As Range
+    Dim entrees As Collection
 
     If Not Reperer(ws) Then
         ControlerCollecte = "- Le bloc collé en A1 n'a pas la mise en page du formulaire" & vbLf & _
-            "  (titres A - EMISSIONS, B - PRESTATIONS et C - AUTRES CHIFFRES introuvables ou décalés)."
+            "  (titres A - EMISSIONS, B - PRESTATIONS ou SINISTRALITE et C - AUTRES CHIFFRES" & vbLf & _
+            "  introuvables, ou lignes Branches / Rubriques absentes)."
         Exit Function
     End If
 
@@ -239,8 +352,12 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     v = Nombre(ws.Cells(mA + 1, 2).Value)
     If Not IsNumeric(v) Or IsEmpty(v) Then
         msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
+        ControlerCollecte = Mid$(msg, 2)
+        Exit Function
     ElseIf v < 1990 Or v > 2100 Or v <> Int(v) Then
         msg = msg & vbLf & "- Année N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
+        ControlerCollecte = Mid$(msg, 2)
+        Exit Function
     End If
 
     ' Date de creation : vide ou date
@@ -251,46 +368,57 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
         msg = msg & vbLf & "- Date de création invalide (B4)."
     End If
 
-    ' Cellules chiffrees : vides ou numeriques (les nombres colles en texte sont acceptes)
-    For Each c In CellulesSaisie(ws).Cells
-        If IsError(c.Value) Then
-            invalides = invalides & " " & c.Address(False, False)
-        Else
-            v = Nombre(c.Value)
-            If Not IsEmpty(v) And Not IsNumeric(v) Then invalides = invalides & " " & c.Address(False, False)
-        End If
+    ' Effectifs : vides ou numeriques
+    For Each c In ws.Range("D6:D8").Cells
+        If Not EstNombreOuVide(c.Value) Then invalides = invalides & " " & c.Address(False, False)
     Next c
+
+    ' Cellules chiffrees des blocs : vides ou numeriques (nombres colles en texte acceptes)
+    Set entrees = LireEntrees(ws)
+    If entrees.Count = 0 Then msg = msg & vbLf & "- Aucune donnée trouvée dans les blocs A, B et C."
+    For Each e In entrees
+        Set c = e(6)
+        If Not EstNombreOuVide(c.Value) Then invalides = invalides & " " & c.Address(False, False)
+    Next e
     If Len(invalides) > 0 Then msg = msg & vbLf & "- Valeurs non numériques :" & invalides
 
     If Len(msg) > 0 Then msg = Mid$(msg, 2)
     ControlerCollecte = msg
 End Function
 
+Private Function EstNombreOuVide(ByVal v As Variant) As Boolean
+    If IsError(v) Then Exit Function
+    v = Nombre(v)
+    EstNombreOuVide = IsEmpty(v) Or IsNumeric(v)
+End Function
+
 ' ---------------------------------------------------------------------------------
-' Lecture du formulaire vers les feuilles brutes
+' Ecriture dans les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Directeur général", "Date de création", _
-        "Capital social (F CFA)", "Cadres", "Maîtrise", "Employés", "Année N", "Date d'import")
+    EntetesIdentification = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+        "Directeur général", "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", _
+        "Employés", "Année N", "Date d'import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Bloc", "Catégorie", _
-        "Rubrique", "Année", "Valeur (milliers F CFA)", "Cellule source")
+    EntetesEmissionsPrestations = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+        "Bloc", "Catégorie", "Rubrique", "Mesure", "Année", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Rubrique", "Année", _
-        "Valeur (milliers F CFA)", "Cellule source")
+    EntetesChiffresCles = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+        "Rubrique", "Année", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 ' Une ligne par saisie.
-Private Sub LireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
+Private Sub EcrireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
     AjouterLigne dest, Array(idSaisie, _
         Cle(CodeSociete(ws), AnneeN1(ws) + 1), _
         CodeSociete(ws), _
         Texte(ws.Range("B1").Value), _
         Texte(ws.Range("B2").Value), _
+        TypeSociete(ws), _
         Texte(ws.Range("B3").Value), _
         ValeurDate(ws.Range("B4").Value), _
         ValeurCapital(ws.Range("B5").Value), _
@@ -301,59 +429,29 @@ Private Sub LireIdentification(ByVal ws As Worksheet, ByVal idSaisie As Long, By
         Now)
 End Sub
 
-' Blocs A (emissions) et B (prestations, meme grille) : N-1 en colonne B, N en colonne D.
-' Une ligne par rubrique et par annee.
-Private Sub LireEmissionsPrestations(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
-    Dim decalages As Variant, blocs As Variant, titres As Variant
-    Dim i As Long, b As Long, r As Long, d As Long, anN1 As Long
-    Dim code As String, societe As String, pays As String, categorie As String, rubrique As String
+' Une ligne par entree, dans Emission&Prestations ou Chiffres clés.
+Private Sub EcrireEntrees(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal entrees As Collection, _
+                          ByVal wsEpB As Worksheet, ByVal wsCcB As Worksheet)
+    Dim e As Variant, c As Range
+    Dim code As String, societe As String, pays As String, typ As String
 
     code = CodeSociete(ws)
     societe = Texte(ws.Range("B1").Value)
     pays = Texte(ws.Range("B2").Value)
-    anN1 = AnneeN1(ws)
+    typ = TypeSociete(ws)
 
-    decalages = Split(DECALAGES_AB, ",")
-    blocs = Array("Émissions", "Prestations")
-    titres = Array(mA, mB)
-    For b = 0 To 1
-        For i = LBound(decalages) To UBound(decalages)
-            d = CLng(decalages(i))
-            r = titres(b) + d
-            Select Case d
-                Case Is < 10: categorie = "Individuelles"
-                Case Is < 17: categorie = "Collectives"
-                Case Else: categorie = "Acceptations"
-            End Select
-            rubrique = Libelle(ws.Cells(r, 1).Value)
-            AjouterLigne dest, Array(idSaisie, Cle(code, blocs(b), categorie, rubrique, anN1), _
-                code, societe, pays, blocs(b), categorie, rubrique, anN1, Nombre(ws.Cells(r, 2).Value), ws.Cells(r, 2).Address(False, False))
-            AjouterLigne dest, Array(idSaisie, Cle(code, blocs(b), categorie, rubrique, anN1 + 1), _
-                code, societe, pays, blocs(b), categorie, rubrique, anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
-        Next i
-    Next b
-End Sub
-
-' Bloc C : N-1 en colonne C, N en colonne D, de la ligne apres "Rubriques" jusqu'a
-' "Taux de couverture". Autres actifs et taux de couverture sont des formules, non reprises.
-Private Sub LireChiffresCles(ByVal ws As Worksheet, ByVal idSaisie As Long, ByVal dest As Worksheet)
-    Dim r As Long, anN1 As Long
-    Dim code As String, societe As String, pays As String, rubrique As String
-
-    code = CodeSociete(ws)
-    societe = Texte(ws.Range("B1").Value)
-    pays = Texte(ws.Range("B2").Value)
-    anN1 = AnneeN1(ws)
-
-    For r = mC + 2 To mFinC
-        rubrique = Libelle(ws.Cells(r, 1).Value)
-        If EstDerivee(rubrique) Then GoTo Suivante
-        AjouterLigne dest, Array(idSaisie, Cle(code, rubrique, anN1), _
-            code, societe, pays, rubrique, anN1, Nombre(ws.Cells(r, 3).Value), ws.Cells(r, 3).Address(False, False))
-        AjouterLigne dest, Array(idSaisie, Cle(code, rubrique, anN1 + 1), _
-            code, societe, pays, rubrique, anN1 + 1, Nombre(ws.Cells(r, 4).Value), ws.Cells(r, 4).Address(False, False))
-Suivante:
-    Next r
+    For Each e In entrees
+        Set c = e(6)
+        If e(0) = T_EP Then
+            AjouterLigne wsEpB, Array(idSaisie, Cle(code, e(1), e(2), e(3), e(4), e(5)), _
+                code, societe, pays, typ, e(1), e(2), e(3), e(4), e(5), _
+                Nombre(c.Value), c.Address(False, False))
+        Else
+            AjouterLigne wsCcB, Array(idSaisie, Cle(code, e(3), e(5)), _
+                code, societe, pays, typ, e(3), e(5), _
+                Nombre(c.Value), c.Address(False, False))
+        End If
+    Next e
 End Sub
 
 Private Sub AjouterLigne(ByVal dest As Worksheet, ByVal valeurs As Variant)
@@ -371,7 +469,7 @@ Private Function SaisiesExistantes(ByVal wsIdB As Worksheet, ByVal code As Strin
     der = wsIdB.Cells(wsIdB.Rows.Count, 1).End(xlUp).Row
     For r = 2 To der
         If StrComp(Texte(wsIdB.Cells(r, 3).Value), code, vbTextCompare) = 0 _
-           And Val(wsIdB.Cells(r, 12).Value) = anN Then
+           And Val(wsIdB.Cells(r, 13).Value) = anN Then
             res.Add wsIdB.Cells(r, 1).Value
         End If
     Next r
@@ -427,20 +525,20 @@ Public Sub RafraichirCopies()
     Set wsEpB = FeuilleBrute(F_EP & SUFFIXE_BRUT, EntetesEmissionsPrestations())
     Set wsCcB = FeuilleBrute(NomChiffresCles() & SUFFIXE_BRUT, EntetesChiffresCles())
 
-    wsIdB.Columns("G").NumberFormat = "dd/mm/yyyy"
-    wsIdB.Columns("H").NumberFormat = "#,##0"
-    wsIdB.Columns("M").NumberFormat = "dd/mm/yyyy hh:mm"
-    wsEpB.Columns("J").NumberFormat = "#,##0.000"
-    wsCcB.Columns("H").NumberFormat = "#,##0.000"
+    wsIdB.Columns("H").NumberFormat = "dd/mm/yyyy"
+    wsIdB.Columns("I").NumberFormat = "#,##0"
+    wsIdB.Columns("N").NumberFormat = "dd/mm/yyyy hh:mm"
+    wsEpB.Columns("L").NumberFormat = "#,##0.000"
+    wsCcB.Columns("I").NumberFormat = "#,##0.000"
 
     ' On saute la colonne A (N° saisie) et on s'arrête avant Date d'import / Cellule source ;
     ' la valeur est reprise par formule * 1000.
-    CreerCopie wsIdB, F_ID, Array("Clé", "Code société", "Société", "Pays", "Directeur général", _
-        "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", "Employés", "Année N"), 11, ""
-    CreerCopie wsEpB, F_EP, Array("Clé", "Code société", "Société", "Pays", "Bloc", "Catégorie", _
-        "Rubrique", "Année", "Valeur (F CFA)"), 8, "J"
-    CreerCopie wsCcB, NomChiffresCles(), Array("Clé", "Code société", "Société", "Pays", "Rubrique", _
-        "Année", "Valeur (F CFA)"), 6, "H"
+    CreerCopie wsIdB, F_ID, Array("Clé", "Code société", "Société", "Pays", "Type", "Directeur général", _
+        "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", "Employés", "Année N"), 12, ""
+    CreerCopie wsEpB, F_EP, Array("Clé", "Code société", "Société", "Pays", "Type", "Bloc", "Catégorie", _
+        "Rubrique", "Mesure", "Année", "Valeur (F CFA)"), 10, "L"
+    CreerCopie wsCcB, NomChiffresCles(), Array("Clé", "Code société", "Société", "Pays", "Type", _
+        "Rubrique", "Année", "Valeur (F CFA)"), 7, "I"
 End Sub
 
 ' Copie visible d'une feuille brute : colonnes B a (1 + nbCols) en valeurs, puis,
@@ -477,8 +575,8 @@ Private Sub CreerCopie(ByVal wsBrut As Worksheet, ByVal nom As String, ByVal ent
     End If
 
     If nom = F_ID Then
-        ws.Columns("F").NumberFormat = "dd/mm/yyyy"
-        ws.Columns("G").NumberFormat = "#,##0"
+        ws.Columns("G").NumberFormat = "dd/mm/yyyy"
+        ws.Columns("H").NumberFormat = "#,##0"
     End If
     ws.Visible = xlSheetVisible
     ws.Range("A1").Resize(1, nbEntetes).EntireColumn.AutoFit
@@ -487,6 +585,7 @@ End Sub
 ' ---------------------------------------------------------------------------------
 ' Conversions
 ' ---------------------------------------------------------------------------------
+
 ' Cle de recherche : elements separes par "|", ex. "BJ-AFGV|Marge disponible|2024".
 Private Function Cle(ParamArray parts() As Variant) As String
     Dim i As Long, s As String
@@ -502,7 +601,7 @@ Private Function Texte(ByVal v As Variant) As String
     Texte = Application.WorksheetFunction.Trim(CStr(v))
 End Function
 
-' Libelle de rubrique nettoye (espaces, fautes de frappe du modele, majuscule initiale).
+' Libelle de rubrique nettoye (espaces, fautes de frappe des formulaires, majuscule initiale).
 Private Function Libelle(ByVal v As Variant) As String
     Dim s As String
     s = Texte(v)
