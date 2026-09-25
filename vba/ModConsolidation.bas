@@ -11,7 +11,7 @@ Option Explicit
 '      correspondant au type de la societe, puis saisir le code societe en H5
 '      (le meme code chaque annee pour une societe).
 '   3. Cliquer sur Enregistrer : la saisie est controlee puis ajoutee a la base.
-'      Le type (Vie / Non-vie) est celui de la feuille de collecte.
+'      La branche (Vie / Non-vie) est celle de la feuille de collecte.
 '
 ' Feuilles brutes (masquées), données telles que saisies :
 '   Identification (brut), Emission&Prestations (brut), Chiffres clés (brut)
@@ -423,18 +423,18 @@ End Function
 ' Ecriture dans les feuilles brutes
 ' ---------------------------------------------------------------------------------
 Private Function EntetesIdentification() As Variant
-    EntetesIdentification = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+    EntetesIdentification = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
         "Directeur général", "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", _
         "Employés", "Année N", "Date d'import")
 End Function
 
 Private Function EntetesEmissionsPrestations() As Variant
-    EntetesEmissionsPrestations = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+    EntetesEmissionsPrestations = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
         "Bloc", "Catégorie", "Rubrique", "Mesure", "Année", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
 Private Function EntetesChiffresCles() As Variant
-    EntetesChiffresCles = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Type", _
+    EntetesChiffresCles = Array("N° saisie", "Clé", "Code société", "Société", "Pays", "Branche", _
         "Rubrique", "Année", "Valeur (milliers F CFA)", "Cellule source")
 End Function
 
@@ -560,11 +560,11 @@ Public Sub RafraichirCopies()
 
     ' On saute la colonne A (N° saisie) et on s'arrête avant Date d'import / Cellule source ;
     ' la valeur est reprise par formule * 1000.
-    CreerCopie wsIdB, F_ID, Array("Clé", "Code société", "Société", "Pays", "Type", "Directeur général", _
+    CreerCopie wsIdB, F_ID, Array("Clé", "Code société", "Société", "Pays", "Branche", "Directeur général", _
         "Date de création", "Capital social (F CFA)", "Cadres", "Maîtrise", "Employés", "Année N"), 12, ""
-    CreerCopie wsEpB, F_EP, Array("Clé", "Code société", "Société", "Pays", "Type", "Bloc", "Catégorie", _
+    CreerCopie wsEpB, F_EP, Array("Clé", "Code société", "Société", "Pays", "Branche", "Bloc", "Catégorie", _
         "Rubrique", "Mesure", "Année", "Valeur (F CFA)"), 10, "L"
-    CreerCopie wsCcB, NomChiffresCles(), Array("Clé", "Code société", "Société", "Pays", "Type", _
+    CreerCopie wsCcB, NomChiffresCles(), Array("Clé", "Code société", "Société", "Pays", "Branche", _
         "Rubrique", "Année", "Valeur (F CFA)"), 7, "I"
 End Sub
 
