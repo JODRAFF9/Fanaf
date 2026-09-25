@@ -65,6 +65,11 @@ Private mC As Long      ' ligne du titre "C - AUTRES CHIFFRES CLES"
 Private mFinC As Long   ' derniere ligne du bloc C ("Taux de couverture")
 Private mType As String ' type de la feuille de collecte en cours : Vie ou Non-vie
 
+' "Code societe" avec ses accents, pour la feuille de collecte et les messages.
+Private Function LibelleCode() As String
+    LibelleCode = "Code soci" & ChrW(233) & "t" & ChrW(233)
+End Function
+
 Private Function NomChiffresCles() As String
     NomChiffresCles = "Chiffres cl" & ChrW(233) & "s"
 End Function
@@ -109,7 +114,7 @@ Private Sub PreparerCollecte(ByVal nom As String, ByVal macro As String)
     btn.Caption = "Enregistrer"
     btn.OnAction = macro
 
-    ws.Range(CELLULE_CODE).Offset(-1, 0).Value = "Code societe"
+    ws.Range(CELLULE_CODE).Offset(-1, 0).Value = LibelleCode()
     ws.Range(CELLULE_CODE).Offset(-1, 0).Font.Bold = True
     ws.Range(CELLULE_CODE).NumberFormat = "@"
     ws.Range(CELLULE_CODE).BorderAround xlContinuous, xlThin
@@ -376,7 +381,7 @@ Private Function ControlerCollecte(ByVal ws As Worksheet) As String
     ' Champs obligatoires
     If Len(Texte(ws.Range("B1").Value)) = 0 Then msg = msg & vbLf & "- Nom de la societe vide (B1)."
     If Len(Texte(ws.Range("B2").Value)) = 0 Then msg = msg & vbLf & "- Pays vide (B2)."
-    If Len(CodeSociete(ws)) = 0 Then msg = msg & vbLf & "- Code societe vide (" & CELLULE_CODE & ")."
+    If Len(CodeSociete(ws)) = 0 Then msg = msg & vbLf & "- " & LibelleCode() & " vide (" & CELLULE_CODE & ")."
     v = Nombre(ws.Cells(mA + 1, 2).Value)
     If Not IsNumeric(v) Or IsEmpty(v) Then
         msg = msg & vbLf & "- Annee N-1 invalide (" & ws.Cells(mA + 1, 2).Address(False, False) & ")."
