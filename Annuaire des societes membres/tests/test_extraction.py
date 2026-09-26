@@ -36,7 +36,7 @@ def valeurs(f):
 
 # ---------------------------------------------------------------- 27e edition, p. 50 (vie)
 def test_27e_nsia_vie_cameroun():
-    f = fiche("ANNUAIRE_FANAF_2018_27e_Edition.pdf", 50)
+    f = fiche("annuaire_fanaf_2020_27eme_edition.pdf", 50)
     assert f["branche"] == "Vie" and f["annees"] == (2017, 2018)
     i = f["ident"]
     assert (i["Societe"], i["Pays"], i["Date"]) == ("NSIA VIE ASSURANCES", "CAMEROUN", "21/10/2013")
@@ -59,7 +59,7 @@ def test_27e_nsia_vie_cameroun():
 
 # ---------------------------------------------------------------- 30e edition, p. 110 (non-vie)
 def test_30e_nsia_cote_ivoire():
-    f = fiche("ANNUAIRE_FANAF_2021_30e_Edition.pdf", 110)
+    f = fiche("annuaire_fanaf_2023_30eme_edition.pdf", 110)
     assert f["branche"] == "Non-vie" and f["annees"] == (2020, 2021)
     v = valeurs(f)
     A, PE, PA, CS = "Affaires directes", "Primes émises", "Primes acquises (PA)", "Charges de sinistres (CS)"
@@ -76,7 +76,7 @@ def test_30e_nsia_cote_ivoire():
 
 # ---------------------------------------------------------------- 33e edition, p. 180 (non-vie)
 def test_33e_wafa_senegal():
-    f = fiche("FANAF-ANNUAIRE-MARCHES-2026.pdf", 180)
+    f = fiche("annuaire_fanaf_2026_33eme_edition.pdf", 180)
     assert f["annees"] == (2023, 2024)
     v = valeurs(f)
     A, CS = "Affaires directes", "Charges de sinistres (CS)"
@@ -90,7 +90,7 @@ def test_33e_wafa_senegal():
 
 # ---------------------------------------------------------------- 32e edition, variantes de mise en page
 def test_32e_atlantique_benin_vie():
-    f = fiche("ANNUAIRE_FANAF_2023_32e_Edition.pdf", 15)
+    f = fiche("annuaire_fanaf_2025_32eme_edition.pdf", 15)
     v = valeurs(f)
     assert v[("Emissions", "Collectives", "Epargne", "Emissions nettes", 2023)] == 1217705
     assert v[("Prestations", "Collectives", "Epargne", "Prestations versees", 2023)] == 1910483
@@ -99,7 +99,7 @@ def test_32e_atlantique_benin_vie():
 
 def test_32e_citoyenne_vie_tirets_et_nombres_coupes():
     # p. 165 : "-" pour zero, nombre coupe en deux ("9" + "5 037"), titre de bloc C different
-    f = fiche("ANNUAIRE_FANAF_2023_32e_Edition.pdf", 165)
+    f = fiche("annuaire_fanaf_2025_32eme_edition.pdf", 165)
     v = valeurs(f)
     assert v[("Emissions", "Individuelles", "Complémentaires", "Emissions nettes", 2022)] == 0
     assert v[("", "", "Résultats d’exploitations nets", "", 2022)] == -34041
@@ -108,7 +108,7 @@ def test_32e_citoyenne_vie_tirets_et_nombres_coupes():
 
 def test_33e_titres_de_blocs_mal_numerotes():
     # p. 105 : "B - EMISSIONS NETTES" et "C - SINISTRALITE"
-    f = fiche("FANAF-ANNUAIRE-MARCHES-2026.pdf", 105)
+    f = fiche("annuaire_fanaf_2026_33eme_edition.pdf", 105)
     assert f is not None and f["branche"] == "Non-vie"
     assert valeurs(f)[("Emissions", "Affaires directes", "Accidents corporels et maladie",
                        "Primes émises", 2023)] == 13249131
@@ -116,7 +116,7 @@ def test_33e_titres_de_blocs_mal_numerotes():
 
 def test_30e_entete_bloc_c_incomplet():
     # p. 65 : l'en-tete du bloc C n'indique que 2021
-    f = fiche("ANNUAIRE_FANAF_2021_30e_Edition.pdf", 65)
+    f = fiche("annuaire_fanaf_2023_30eme_edition.pdf", 65)
     v = valeurs(f)
     assert v[("", "", "Produits financiers nets", "", 2020)] == 43371
     assert v[("", "", "Produits financiers nets", "", 2021)] == 12866

@@ -40,6 +40,10 @@ RUBRIQUES_C = ["Produits financiers nets", "Commissions", "Autres charges de l'e
                "Résultats d’exploitations nets", "Total des capitaux propres et réserves",
                "Résultats au Bilan", "Marge réglementaire", "Marge disponible", "Engagements Réglementés",
                "Actifs admis", "Dont liquidités", "Autres actifs"]
+# Nomenclatures des editions anciennes (12e a 18e) : branches vie et regroupements non vie
+RUBRIQUES_VIE_ANCIENNES = ["Grande Branche", "Collectives", "Complémentaires", "Autres Risques", "Capitalisation"]
+BRANCHES_NV_ANCIENNES = ["Automobiles", "Transports", "Accidents corporels", "Maladie"]
+TIRET = "[-\u2010-\u2015]"
 
 
 # Libelles tronques ou alteres dans le PDF (p. 86 : "Actifs" ; p. 107 : "U°E")
@@ -175,8 +179,8 @@ def lire_fiche(page, num_page):
                 return i
         return None
 
-    iA = index(r"(^| )[AB]? ?- ?EMISSIONS NETTES")
-    iB = index(r"(^| )[ABC]? ?- ?(PRESTATIONS|SINISTRALITE)", iA + 1 if iA is not None else 0)
+    iA = index(rf"(^| )[AB]? ?{TIRET} ?(LES )?EMISSIONS NETTES")
+    iB = index(rf"(^| )[ABC]? ?{TIRET} ?(LA )?(PRESTATIONS|SINISTRALITE)", iA + 1 if iA is not None else 0)
     if iA is None or iB is None:
         return None
     iC = index(r"^Rubriques", iB)
@@ -237,7 +241,14 @@ def lire_fiche(page, num_page):
         # colonnes des montants
         ent = next((l for l in blk if sum(1 for m in l if ANNEE.match(m["text"])) >= 2), None)
         cent_annees = [centre(m) for m in ent if ANNEE.match(m["text"])][:2] if ent else [centre(m) for m in ent_A]
-        if branche == "Non-vie" and nom_bloc == "Emissions":
+        entete = " ".join(m["text"] for l in blk[:4] for m in l)
+        mes_unique = False
+        if branche == "Non-vie" and nom_bloc == "Emissions" and not re.search(r"acquises|\(PA\)", entete, re.I):
+            # 12e et 13e editions : un seul montant par annee, "(P)"
+            mes_unique = True
+            centres = cent_annees
+            cols = [("Primes (P)", annees[0]), ("Primes (P)", annees[1])]
+        elif branche == "Non-vie" and nom_bloc == "Emissions":
             mesures = ["Primes émises", "Primes acquises (PA)"]
             ref = next((decouper(l, 250)[1] for l in blk
                         if re.match(r"(ensemble|total|chiffre d)", " ".join(m["text"] for m in l), re.I)
@@ -253,12 +264,15 @@ def lire_fiche(page, num_page):
                 centres = [centre(m) for m in sous[:4]]
             cols = [(mesures[0], annees[0]), (mesures[1], annees[0]), (mesures[0], annees[1]), (mesures[1], annees[1])]
         else:
-            mes = ("Charges de sinistres (CS)" if branche == "Non-vie" else
+            mes_unique = True
+            ancien_s = bool(re.search(r"\(S\)", entete)) and not re.search(r"\(CS\)", entete)
+            mes = (("Sinistres (S)" if ancien_s else "Charges de sinistres (CS)") if branche == "Non-vie" else
                    "Emissions nettes" if nom_bloc == "Emissions" else "Prestations versees")
             centres = cent_annees
             cols = [(mes, annees[0]), (mes, annees[1])]
 
-        reference = BRANCHES_NV if branche == "Non-vie" else RUBRIQUES_VIE
+        reference = (BRANCHES_NV + BRANCHES_NV_ANCIENNES if branche == "Non-vie"
+                     else RUBRIQUES_VIE + RUBRIQUES_VIE_ANCIENNES)
         categorie = "Affaires directes" if branche == "Non-vie" else ""
         n_vie = 0
         sommes, totaux, membres = {}, {}, {}
@@ -269,6 +283,8 @@ def lire_fiche(page, num_page):
                 categorie = libelle(seul.split(None, 1)[1])
                 continue
             low = lab.lower()
+            if low == "biens" and not mont:
+                continue  # suite du libelle "Incendie et autres dommages aux" coupe sur deux lignes
             if (not lab or low.startswith("branches") or low.startswith("(chiffre")
                     or re.match(r"(\(cs\)|primes)", low)):
                 continue
@@ -290,20 +306,24 @@ def lire_fiche(page, num_page):
                 k = ("acc", mes, an) if cat == "Acceptations" else (mes, an)
                 sommes[k] = sommes.get(k, 0) + (v or 0)
                 membres.setdefault(k, []).append(("EP", nom_bloc, cat, lab, mes, an))
-                if mes == "Primes acquises (PA)":
-                    primes_acquises[(lab, an)] = v
+                if mes in ("Primes acquises (PA)", "Primes (P)"):
+                    primes_acquises[(lab, an)] = (mes, v)
             pc = pourcents(l)
             cles_l = [("EP", nom_bloc, cat, lab, mes, an) for mes, an in cols]
-            if branche == "Vie" and vals[0] and vals[1] and len(pc) == 3:
+            if mes_unique and nom_bloc != "Sinistralite" and vals[0] and vals[1] and len(pc) == 3:
                 tester(cles_l, pc[2], vals[0], vals[1], "evolution")
             elif branche == "Non-vie" and nom_bloc == "Sinistralite":
                 non_nuls = [k for k in range(2) if vals[k]]
+                if len(pc) == len(non_nuls) + 1 and len(non_nuls) == 2:
+                    # 12e a 16e editions : ratio par annee puis evolution
+                    tester(cles_l, pc[-1], vals[0], vals[1], "evolution")
+                    pc = pc[:-1]
                 if len(pc) == len(non_nuls):
                     for k, p_ in zip(non_nuls, pc):
-                        pa = primes_acquises.get((lab, annees[k]))
+                        mes_p, pa = primes_acquises.get((lab, annees[k]), (None, None))
                         if pa:
-                            tester([cles_l[k], ("EP", "Emissions", cat, lab, "Primes acquises (PA)", annees[k])],
-                                   p_, pa, vals[k], "ratio CS/PA")
+                            tester([cles_l[k], ("EP", "Emissions", cat, lab, mes_p, annees[k])],
+                                   p_, pa, vals[k], "ratio sinistres/primes")
         for (mes, an) in cols:
             s = sommes.get((mes, an), 0)
             t = totaux.get(("total", mes, an))
@@ -374,8 +394,12 @@ def date_ou_texte(s):
 
 
 def capital(s):
+    """Capital en F CFA ; un capital exprime dans une autre monnaie (DA, dinars...) reste en texte."""
     ch = re.sub(r"\D", "", s or "")
-    return float(ch) if ch else (s or None)
+    lettres = re.sub(r"F\.? ?CFA|francs? CFA|\d|\W", "", s or "", flags=re.I)
+    if ch and not lettres:
+        return float(ch)
+    return s or None
 
 
 def ecrire(fiches, sortie):
@@ -455,8 +479,10 @@ def pays_normalise(p):
     return unicodedata.normalize("NFKD", p).encode("ascii", "ignore").decode().upper().strip()
 
 
-def lire_pdf(pdf_path):
-    """Lit toutes les fiches societes du PDF. Renvoie (fiches, pages non lues)."""
+def lire_pdf(pdf_path, reassureurs=None):
+    """Lit toutes les fiches societes du PDF. Renvoie (fiches, pages non lues).
+    Les fiches de reassureurs (bloc "Les resultats") sont hors champ : leurs pages
+    sont ajoutees a la liste reassureurs si elle est fournie."""
     fiches, ignorees = [], []
     pays_section = ""
     with pdfplumber.open(pdf_path) as pdf:
@@ -467,7 +493,11 @@ def lire_pdf(pdf_path):
             if k > 10 and len(mots) == 1 and mots[0].isupper() and len(mots[0]) < 30:
                 pays_section = pays_normalise(mots[0])
                 continue
-            if not re.search(r"NOM DE LA SOCIETE", t) or not re.search(r"EMISSIONS NETTES", t):
+            if not re.search(r"NOM DE LA SOCI[EÉ]T[EÉ]", t, re.I) or not re.search(r"EMISSIONS NETTES", t):
+                continue
+            if re.search(rf"{TIRET} ?LES RESULTATS", t) and re.search(r"R[ée]trocession", t):
+                if reassureurs is not None:
+                    reassureurs.append(k)
                 continue
             f = lire_fiche(page, k)
             if f is None:

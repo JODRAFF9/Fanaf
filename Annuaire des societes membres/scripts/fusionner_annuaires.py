@@ -21,6 +21,7 @@ from collections import Counter
 import re
 import sys
 from datetime import datetime
+from multiprocessing import Pool
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -149,7 +150,39 @@ def construire(editions):
     return societes, notes
 
 
-def ecrire(societes, notes, sortie, libelles, bilans=None):
+ND = "Non disponible"
+
+
+def nomenclature(f):
+    """Groupe de mise en page d'une fiche : branche, et pour la vie, ancienne ou nouvelle nomenclature."""
+    if f["branche"] != "Vie":
+        return f["branche"]
+    anciennes = set(ex.RUBRIQUES_VIE_ANCIENNES) - {"Complémentaires"}
+    return "Vie (ancienne nomenclature)" if any(e[0] == "EP" and not e[2] and e[3] in anciennes
+                                                for e in f["entrees"]) else "Vie"
+
+
+def structures(editions, seuil=0.2):
+    """Rubriques publiees par chaque edition, par groupe de mise en page : une cle figure dans
+    la structure si au moins 20 % des fiches du groupe la portent (case vide comprise).
+    Renvoie ({(edition, groupe): cles}, {branche: toutes les cles connues})."""
+    par_groupe, union = {}, {}
+    for lib, fiches in editions:
+        compte, n = {}, Counter()
+        for f in fiches:
+            g = nomenclature(f)
+            n[g] += 1
+            for c in {e[:5] for e in f["entrees"]}:
+                compte[(g, c)] = compte.get((g, c), 0) + 1
+        for (g, c), k in compte.items():
+            if k >= seuil * n[g]:
+                par_groupe.setdefault((lib, g), set()).add(c)
+    for (lib, g), cles in par_groupe.items():
+        union.setdefault("Vie" if g.startswith("Vie") else g, set()).update(cles)
+    return par_groupe, union
+
+
+def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
     wb = Workbook()
     wb.remove(wb.active)
     gras = Font(bold=True)
@@ -164,30 +197,68 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
             ws.sheet_state = "hidden"
         return ws
 
+    par_groupe, union = structures(editions or [])
+    rang = {lib: k for k, lib in enumerate(libelles)}
+
+    # Valeurs : (type, cle) -> {annee: [(edition, valeur, reference)]}, dans l'ordre des editions.
+    # Une rubrique absente de la mise en page d'une edition y vaut "Non disponible".
+    donnees = []
+    npub = 1
+    for s in societes:
+        d = {}
+        for lib in libelles:
+            f = s["fiches"].get(lib)
+            if f is None:
+                continue
+            lus = {}
+            for typ, bloc, cat, rub, mes, an, v in f["entrees"]:
+                lus[(typ, bloc, cat, rub, mes, an)] = v
+            structure = par_groupe.get((lib, nomenclature(f)), set())
+            for c in union.get(f["branche"], ()):
+                if c not in structure:
+                    for an in f["annees"]:
+                        lus.setdefault(c + (an,), ND)
+            for (typ, bloc, cat, rub, mes, an), v in lus.items():
+                cle_l = (typ, bloc, cat or None, rub, mes or None)
+                pubs = d.setdefault(cle_l, {}).setdefault(an, [])
+                pubs.append((lib, v, ref(f)))
+                npub = max(npub, len(pubs))
+        donnees.append(d)
+
     e_id = ["No enregistrement", "No societe", "Edition", "Societe", "Pays", "Branche", "Directeur general",
             "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N", "Source"]
     idv = feuille("Identification", e_id)
     e_ep = ["No societe", "Societe", "Pays", "Branche", "Bloc", "Categorie", "Rubrique", "Mesure", "Annee"]
     e_cc = ["No societe", "Societe", "Pays", "Branche", "Rubrique", "Annee"]
-    ne = len(libelles)
-    # "Valeur" : une valeur par ligne quelle que soit la source, calculee par formule a partir
-    # des colonnes par source ; si l'annee figure dans plusieurs sources, la plus recente
-    # est retenue, et "Source retenue" l'indique (formule egalement).
-    ret_v, ret_vb, ret_s = ["Valeur (F CFA)"], ["Valeur (milliers F CFA)"], ["Source retenue"]
-    epv = feuille("Emission&Prestations", e_ep + ret_v + ret_s + [f"Valeur {e} (F CFA)" for e in libelles])
-    ccv = feuille("Chiffres clés", e_cc + ret_v + ret_s + [f"Valeur {e} (F CFA)" for e in libelles])
-    epb = feuille("Emission&Prestations (brut)", e_ep + ret_vb + ret_s
-                  + [f"Valeur {e} (milliers F CFA)" for e in libelles] + [f"Source {e}" for e in libelles], True)
-    ccb = feuille("Chiffres clés (brut)", e_cc + ret_vb + ret_s
-                  + [f"Valeur {e} (milliers F CFA)" for e in libelles] + [f"Source {e}" for e in libelles], True)
-    col_ep = [get_column_letter(len(e_ep) + 3 + k) for k in range(ne)]
-    col_cc = [get_column_letter(len(e_cc) + 3 + k) for k in range(ne)]
-    ret_ep, ret_cc = get_column_letter(len(e_ep) + 1), get_column_letter(len(e_cc) + 1)
+    # Une annee est publiee dans une ou plusieurs editions (N dans l'une, N-1 dans la suivante) :
+    # une paire de colonnes (valeur, edition) par publication, de la plus ancienne a la plus recente.
+    # "Valeur" retient par formule la publication la plus recente qui donne un nombre ; a defaut,
+    # "Non disponible" si la rubrique n'existe pas dans la mise en page des editions concernees.
+    pub_b = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k} (milliers F CFA)", f"Edition publication {k}")]
+    pub_v = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k} (F CFA)", f"Edition publication {k}")]
+    epv = feuille("Emission&Prestations", e_ep + ["Valeur (F CFA)", "Source retenue"] + pub_v)
+    ccv = feuille("Chiffres clés", e_cc + ["Valeur (F CFA)", "Source retenue"] + pub_v)
+    epb = feuille("Emission&Prestations (brut)", e_ep + ["Valeur (milliers F CFA)", "Source retenue"] + pub_b
+                  + [f"Reference publication {k}" for k in range(1, npub + 1)], True)
+    ccb = feuille("Chiffres clés (brut)", e_cc + ["Valeur (milliers F CFA)", "Source retenue"] + pub_b
+                  + [f"Reference publication {k}" for k in range(1, npub + 1)], True)
+
+    def formules(n_base, r):
+        cv = [get_column_letter(n_base + 3 + 2 * k) for k in range(npub)]
+        cs = [get_column_letter(n_base + 4 + 2 * k) for k in range(npub)]
+        plage = ",".join(f"{c}{r}" for c in cv)
+        f_val = f'IF(COUNTIF({cv[0]}{r}:{cv[-1]}{r},"{ND}")>0,"{ND}","")' if npub > 1 else \
+            f'IF({cv[0]}{r}="{ND}","{ND}","")'
+        f_src = f'IF(COUNTIF({cv[0]}{r}:{cv[-1]}{r},"{ND}")>0,{cs[-1]}{r},"")' if npub > 1 else \
+            f'IF({cv[0]}{r}="{ND}",{cs[0]}{r},"")'
+        for c, e in zip(cv, cs):
+            f_val = f"IF(ISNUMBER({c}{r}),{c}{r},{f_val})"
+            f_src = f"IF(ISNUMBER({c}{r}),{e}{r},{f_src})"
+        return "=" + f_val, "=" + f_src, cv, cs
 
     n_enr = 0
-    for no, s in enumerate(societes, 1):
+    for no, (s, d) in enumerate(zip(societes, donnees), 1):
         base_soc = [no, s["nom"], s["pays"], s["branche"]]
-        # Identification : une ligne par fiche (edition)
         for lib in libelles:
             f = s["fiches"].get(lib)
             if f is None:
@@ -197,57 +268,56 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
             idv.append([n_enr, no, lib, s["nom"] if f["illisible"] else i["Societe"], s["pays"],
                         s["branche"], i["DG"] or None, ex.date_ou_texte(i["Date"]), ex.capital(i["Capital"]),
                         i["Cadres"], i["Maitrise"], i["Employes"], f["annees"][1], ref(f)])
-        # Valeurs : cle -> [valeur par edition] + [source par edition]
-        lignes_ep, lignes_cc = {}, {}
-        for k, lib in enumerate(libelles):
-            f = s["fiches"].get(lib)
-            if f is None:
-                continue
-            for typ, bloc, cat, rub, mes, an, v in f["entrees"]:
+        for cle_l in sorted(d, key=lambda c: tuple(x or "" for x in c)):
+            typ, bloc, cat, rub, mes = cle_l
+            for an in sorted(d[cle_l]):
+                pubs = sorted(d[cle_l][an], key=lambda p: rang[p[0]])
                 if typ == "EP":
-                    d, cle_l = lignes_ep, (bloc, cat or None, rub, mes, an)
+                    wsb, wsv, nomb, cles = epb, epv, "Emission&Prestations (brut)", [bloc, cat, rub, mes, an]
+                    n_base = len(e_ep)
                 else:
-                    d, cle_l = lignes_cc, (rub, an)
-                e = d.setdefault(cle_l, [None] * (2 * ne))
-                e[k] = v
-                e[ne + k] = ref(f)
-        for d, wsb, wsv, cols, cret, nomb in (
-                (lignes_ep, epb, epv, col_ep, ret_ep, "Emission&Prestations (brut)"),
-                (lignes_cc, ccb, ccv, col_cc, ret_cc, "Chiffres clés (brut)")):
-            for cle_l in sorted(d, key=lambda c: (c[:-1], c[-1])):
+                    wsb, wsv, nomb, cles = ccb, ccv, "Chiffres clés (brut)", [rub, an]
+                    n_base = len(e_cc)
                 r = wsb.max_row + 1
-                # Valeur retenue et sa source, par formule : la source la plus recente renseignee
-                f_val = f_src = '""'
-                for c, lib in zip(cols, libelles):
-                    f_val = f'IF({c}{r}<>"",{c}{r},{f_val})'
-                    f_src = f'IF({c}{r}<>"","{lib}",{f_src})'
-                wsb.append(base_soc + list(cle_l) + ["=" + f_val, "=" + f_src] + d[cle_l])
-                wsv.append(base_soc + list(cle_l) + ["=" + f_val, "=" + f_src]
-                           + [f"=IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}*1000)" for c in cols])
+                f_val, f_src, cv, cs = formules(n_base, r)
+                vals = [x for lib, v, _ in pubs for x in (v, lib)] + [None, None] * (npub - len(pubs))
+                refs = [rf for _, _, rf in pubs] + [None] * (npub - len(pubs))
+                wsb.append(base_soc + cles + [f_val, f_src] + vals + refs)
+                cr = get_column_letter(n_base + 1)
+                ligne_v = base_soc + cles + [f"=IF(ISNUMBER('{nomb}'!{cr}{r}),'{nomb}'!{cr}{r}*1000,'{nomb}'!{cr}{r})",
+                                             f"='{nomb}'!{get_column_letter(n_base + 2)}{r}"]
+                for c, e in zip(cv, cs):
+                    ligne_v += [f"=IF(ISNUMBER('{nomb}'!{c}{r}),'{nomb}'!{c}{r}*1000,IF('{nomb}'!{c}{r}=\"\",\"\",'{nomb}'!{c}{r}))",
+                                f"=IF('{nomb}'!{e}{r}=\"\",\"\",'{nomb}'!{e}{r})"]
+                wsv.append(ligne_v)
 
-    # --- Verification : bilan des tests de recalcul et concordance entre sources ---
+    # --- Verification : bilan des tests de recalcul et concordance entre publications ---
     vf = feuille("Verification", ["Controle", "Source", "Resultat", "Detail"])
     for lib, nb_fiches, tot, ind, som, tests, echecs in (bilans or []):
+        tot_ = max(tot, 1)
         vf.append(["Fiches lues", lib, nb_fiches, ""])
         vf.append(["Valeurs non nulles", lib, tot, ""])
-        vf.append(["Verifiees individuellement", lib, f"{100 * ind / tot:.1f} %",
-                   f"{ind} valeurs recalculees a partir de l'evolution ou du ratio CS/PA imprimes"])
-        vf.append(["Verifiees par un total", lib, f"{100 * som / tot:.1f} %",
+        vf.append(["Verifiees individuellement", lib, f"{100 * ind / tot_:.1f} %",
+                   f"{ind} valeurs recalculees a partir de l'evolution ou du ratio sinistres/primes imprimes"])
+        vf.append(["Verifiees par un total", lib, f"{100 * som / tot_:.1f} %",
                    f"{som} valeurs dont la somme redonne le total imprime"])
-        vf.append(["Non verifiees", lib, f"{100 * (tot - ind - som) / tot:.1f} %",
+        vf.append(["Non verifiees", lib, f"{100 * (tot - ind - som) / tot_:.1f} %",
                    f"{tot - ind - som} valeurs sans controle possible (valeur isolee, une seule annee...)"])
         vf.append(["Tests de recalcul en echec", lib, f"{len(echecs)} / {tests}",
                    "incoherences de la source (ratio ou evolution imprime faux), detail ci-dessous"])
-    for nomb, wsb, cols in (("Emission&Prestations", epb, col_ep), ("Chiffres cles", ccb, col_cc)):
-        idx = [c.column - 1 for c in wsb[1] if c.column_letter in cols]
+    for nomb, d_type in (("Emission&Prestations", "EP"), ("Chiffres cles", "CC")):
         deux = egal = 0
-        for row in wsb.iter_rows(min_row=2, values_only=True):
-            vs = [row[i] for i in idx if row[i] is not None]
-            if len(vs) >= 2:
-                deux += 1
-                egal += max(vs) - min(vs) <= max(1, 0.001 * max(abs(x) for x in vs))
+        for d in donnees:
+            for cle_l, par_an in d.items():
+                if cle_l[0] != d_type:
+                    continue
+                for pubs in par_an.values():
+                    vs = [v for _, v, _ in pubs if isinstance(v, (int, float))]
+                    if len(vs) >= 2:
+                        deux += 1
+                        egal += max(vs) - min(vs) <= max(1, 0.001 * max(abs(x) for x in vs))
         if deux:
-            vf.append([f"Concordance entre sources ({nomb})", "annees publiees deux fois",
+            vf.append([f"Concordance entre publications ({nomb})", "annees publiees deux fois",
                        f"{100 * egal / deux:.1f} %", f"{egal} valeurs identiques sur {deux} "
                        "(les ecarts restants sont des revisions entre deux publications)"])
     for lib, nb_fiches, tot, ind, som, tests, echecs in (bilans or []):
@@ -255,6 +325,11 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
             vf.append(["Echec de recalcul", lib, f"{src} {soc}", x])
 
     nt = feuille("Notes", ["Type", "Reference", "Detail"])
+    nt.append([ND, "toutes editions", "la rubrique ou la mesure n'existe pas dans la mise en page de l'edition "
+               "(nomenclature ou bloc different) ; une case vide signifie que la rubrique existe mais que "
+               "la fiche ne la renseigne pas"])
+    for (lib, g), cles in sorted(par_groupe.items(), key=lambda x: (rang.get(x[0][0], 0), x[0][1])):
+        nt.append(["Structure", f"{lib} / {g}", f"{len(cles)} rubriques et mesures publiees"])
     for n in notes:
         nt.append(list(n))
 
@@ -262,31 +337,37 @@ def ecrire(societes, notes, sortie, libelles, bilans=None):
         c.number_format = "dd/mm/yyyy"
     for c in idv["I"][1:]:
         c.number_format = "#,##0"
-    for ws, cols in ((epv, col_ep + [ret_ep]), (ccv, col_cc + [ret_cc])):
-        for col in cols:
-            for c in ws[col][1:]:
-                c.number_format = "#,##0"
-    for ws, cols in ((epb, col_ep + [ret_ep]), (ccb, col_cc + [ret_cc])):
-        for col in cols:
-            for c in ws[col][1:]:
-                c.number_format = "#,##0.000"
+    for ws, n_base in ((epv, len(e_ep)), (ccv, len(e_cc)), (epb, len(e_ep)), (ccb, len(e_cc))):
+        fmt = "#,##0.000" if ws.sheet_state == "hidden" else "#,##0"
+        for k in [n_base + 1] + [n_base + 3 + 2 * j for j in range(npub)]:
+            for c in ws[get_column_letter(k)][1:]:
+                c.number_format = fmt
     for ws in wb.worksheets:
-        for col in ws.columns:
-            larg = max((len(str(c.value)) for c in col[:300]
+        for col in ws.iter_cols(max_row=300):
+            larg = max((len(str(c.value)) for c in col
                         if c.value is not None and not str(c.value).startswith("=")), default=12)
             ws.column_dimensions[col[0].column_letter].width = min(max(10, larg + 2), 60)
     wb.save(sortie)
+
+
+def lire_source(chemin):
+    """PDF d'annuaire, ou dossiers de formulaires Excel separes par ";"."""
+    if ";" in chemin or os.path.isdir(chemin):
+        return lx.lire_dossiers([c for c in chemin.split(";") if c]) + ([],)
+    reass = []
+    fs, ign = ex.lire_pdf(chemin, reass)
+    return fs, ign, reass
 
 
 def main(sortie, editions_pdf):
     """editions_pdf : [(libelle, chemin du PDF)] de la plus ancienne a la plus recente."""
     editions = []
     notes_lecture = []
-    for lib, chemin in editions_pdf:
-        if ";" in chemin or os.path.isdir(chemin):
-            fs, ign = lx.lire_dossiers([c for c in chemin.split(";") if c])  # formulaires Excel
-        else:
-            fs, ign = ex.lire_pdf(chemin)
+    with Pool(min(len(editions_pdf), os.cpu_count() or 1)) as pool:
+        lus = pool.map(lire_source, [chemin for _, chemin in editions_pdf])
+    for (lib, chemin), (fs, ign, reass) in zip(editions_pdf, lus):
+        if reass:
+            notes_lecture.append(("Hors champ", lib, "fiches de reassureurs, pages " + ", ".join(map(str, reass))))
         normaliser(fs)
         editions.append((lib, fs))
         if ign:
@@ -305,7 +386,7 @@ def main(sortie, editions_pdf):
     for lib, fs in editions:
         tot, ind, som, tests, echecs = vx.bilan(fs)
         bilans.append((lib, len(fs), tot, ind, som, tests, echecs))
-    ecrire(societes, notes, sortie, libelles, bilans)
+    ecrire(societes, notes, sortie, libelles, bilans, editions)
     for lib, fs in editions:
         print(f"{lib} : {len(fs)} fiches")
     print(f"{len(societes)} societes")
