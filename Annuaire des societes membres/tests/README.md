@@ -15,7 +15,7 @@ Tests de non regression de l'extraction. Les valeurs attendues ont ete relevees 
 Depuis le dossier `Annuaire des societes membres` :
 
 ```
-FANAF_PDF_DIR=chemin/des/pdf python -m pytest tests -q
+python -m pytest tests -q
 ```
 
-Un test est ignore si son PDF est absent de `FANAF_PDF_DIR`.
+Les PDF sont lus dans `documents/`, ou dans le dossier indique par la variable `FANAF_PDF_DIR`. Un test est ignore si son PDF est absent.

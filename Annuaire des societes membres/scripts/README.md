@@ -14,16 +14,16 @@ Prerequis : `pip install pdfplumber openpyxl xlrd`
 Depuis le dossier `Annuaire des societes membres`, sources de la plus ancienne a la plus recente :
 
 ```
-python scripts/extraire_annuaire.py annuaire.pdf sortie.xlsx
+python scripts/extraire_annuaire.py documents/ANNUAIRE_FANAF_2023_32e_Edition.pdf sortie.xlsx
 
 python scripts/fusionner_annuaires.py "donnees/Base FANAF 2017 2024.xlsx" \
-    "27e edition=ANNUAIRE_FANAF_2018_27e_Edition.pdf" \
-    "Formulaires 2020=Stes vie 2020;Stes non vie 2020" \
-    "30e edition=ANNUAIRE_FANAF_2021_30e_Edition.pdf" \
-    "32e edition=ANNUAIRE_FANAF_2023_32e_Edition.pdf" \
-    "33e edition=FANAF-ANNUAIRE-MARCHES-2026.pdf"
+    "27e edition=documents/ANNUAIRE_FANAF_2018_27e_Edition.pdf" \
+    "Formulaires 2020=documents/Formulaires 2020/Stes vie 2020;documents/Formulaires 2020/Stes non vie 2020" \
+    "30e edition=documents/ANNUAIRE_FANAF_2021_30e_Edition.pdf" \
+    "32e edition=documents/ANNUAIRE_FANAF_2023_32e_Edition.pdf" \
+    "33e edition=documents/FANAF-ANNUAIRE-MARCHES-2026.pdf"
 
-python scripts/verifier_extraction.py "33e edition=FANAF-ANNUAIRE-MARCHES-2026.pdf"
+python scripts/verifier_extraction.py "33e edition=documents/FANAF-ANNUAIRE-MARCHES-2026.pdf"
 ```
 
 Une source est un PDF d'annuaire, ou une liste de dossiers de formulaires separes par ";".

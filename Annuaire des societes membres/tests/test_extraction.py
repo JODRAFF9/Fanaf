@@ -2,7 +2,7 @@
 
 Les valeurs attendues ont ete relevees a la main sur les pages rendues en image
 (controle visuel), puis figees ici. Les PDF sont cherches dans FANAF_PDF_DIR
-(par defaut le dossier "Annuaire des societes membres") ; un test est ignore si son PDF est absent.
+(par defaut le sous-dossier documents) ; un test est ignore si son PDF est absent.
 
 Lancement, depuis ce dossier : python -m pytest tests -q
 """
@@ -15,7 +15,7 @@ RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RACINE, "scripts"))
 import extraire_annuaire as ex  # noqa: E402
 
-DOSSIER = os.environ.get("FANAF_PDF_DIR", RACINE)
+DOSSIER = os.environ.get("FANAF_PDF_DIR", os.path.join(RACINE, "documents"))
 _cache = {}
 
 
