@@ -34,8 +34,22 @@ requete <- function(url) {
     req_error(is_error = function(r) FALSE)
 }
 
-# Execute une requete ; NULL en cas d'erreur reseau
-executer <- function(req, ...) tryCatch(req_perform(req, ...), error = function(e) NULL)
+# Execute une requete ; NULL en cas d'erreur reseau, l'erreur est gardee dans le journal
+journal <- character()
+executer <- function(req, ...) {
+  tryCatch(req_perform(req, ...), error = function(e) {
+    journal <<- c(journal, paste(req$url, ":", conditionMessage(e)))
+    NULL
+  })
+}
+
+# Diagnostic : le site repond-il a R ? (certificat, proxy d'entreprise, pare-feu du site)
+diag <- executer(requete(paste0(base, "/")))
+if (is.null(diag)) {
+  message("fanaf.org injoignable depuis R : ", tail(journal, 1))
+} else {
+  message("fanaf.org repond avec le code ", resp_status(diag))
+}
 
 ok <- function(rep) !is.null(rep) && resp_status(rep) == 200
 
@@ -152,19 +166,44 @@ if (!is.null(archives) && nrow(archives) > 0) {
   if (nrow(archives) > 0) {
     inventaire <- rbind(inventaire, data.frame(
       source  = "wayback",
-      url     = paste0("https://web.archive.org/web/", archives$timestamp, "id_/", archives$original),
+      # adresse d'origine d'abord (le fichier est peut-etre encore en ligne), puis l'archive
+      url     = paste(archives$original,
+                      paste0("https://web.archive.org/web/", archives$timestamp, "id_/", archives$original),
+                      sep = " | "),
       fichier = archives$fichier,
       stringsAsFactors = FALSE))
   }
 }
 
+est_pdf <- function(f) file.exists(f) && identical(readBin(f, "raw", 4), charToRaw("%PDF"))
+
+# httr2 d'abord (delai long : la Wayback Machine est lente), puis download.file,
+# qui passe par le proxy et les certificats de Windows. L'etat donne la cause d'un echec.
+telecharger_un <- function(url, dest) {
+  rep <- executer(requete(url) |> req_timeout(600), path = dest)
+  if (ok(rep) && est_pdf(dest)) return("telecharge")
+  cause <- if (is.null(rep)) "erreur reseau" else paste("code", resp_status(rep))
+  unlink(dest)
+  methode <- if (.Platform$OS.type == "windows") "wininet" else "libcurl"
+  r <- suppressWarnings(tryCatch(
+    download.file(url, dest, mode = "wb", quiet = TRUE, method = methode),
+    error = function(e) 1))
+  if (r == 0 && est_pdf(dest)) return("telecharge (download.file)")
+  unlink(dest)
+  paste("echec :", cause)
+}
+
+# url peut contenir plusieurs adresses separees par " | ", essayees dans l'ordre
 telecharger <- function(url, dest) {
-  if (file.exists(dest)) return("deja present")
-  rep <- executer(requete(url), path = dest)
-  valide <- ok(rep) && file.exists(dest) &&
-            identical(readBin(dest, "raw", 4), charToRaw("%PDF"))
-  if (!valide) { unlink(dest); return("echec") }
-  "telecharge"
+  if (est_pdf(dest)) return("deja present")
+  unlink(dest)
+  etats <- character()
+  for (u in strsplit(url, " | ", fixed = TRUE)[[1]]) {
+    e <- telecharger_un(u, dest)
+    if (startsWith(e, "telecharge")) return(e)
+    etats <- c(etats, e)
+  }
+  paste(etats, collapse = " ; ")
 }
 
 message("Telechargement de ", nrow(inventaire), " fichiers")
@@ -172,3 +211,8 @@ inventaire$etat <- map2_chr(inventaire$url, file.path(dossier, inventaire$fichie
 
 print(inventaire[, c("source", "fichier", "etat")])
 write.csv(inventaire, file.path(dossier, "inventaire.csv"), row.names = FALSE)
+
+if (length(journal) > 0) {
+  message("\nErreurs reseau (", length(journal), "), les 10 premieres :")
+  message(paste(head(unique(journal), 10), collapse = "\n"))
+}
