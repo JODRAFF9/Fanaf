@@ -45,6 +45,23 @@ RUBRIQUES_VIE_ANCIENNES = ["Grande Branche", "Collectives", "Complémentaires", 
 BRANCHES_NV_ANCIENNES = ["Automobiles", "Transports", "Accidents corporels", "Maladie"]
 TIRET = "[-\u2010-\u2015]"
 
+# Monnaie des montants, d'apres la mention "(chiffres en milliers de ...)" de la fiche
+MONNAIES = [(r"cfa", "F CFA"), (r"burundais|fbu|bif", "Franc burundais"), (r"guin|gnf", "Franc guineen"),
+            (r"fmg|malgache", "Franc malgache"), (r"ariary", "Ariary"), (r"rwandais|frw", "Franc rwandais"),
+            (r"\$|dollar|usd", "Dollar US"), (r"dinar", "Dinar"), (r"cedi", "Cedi"), (r"ouguiya", "Ouguiya")]
+ZONE_CFA = {"BENIN", "BURKINA FASO", "COTE D'IVOIRE", "GUINEE BISSAU", "MALI", "NIGER", "SENEGAL", "TOGO",
+            "CAMEROUN", "CENTRAFRIQUE", "CONGO", "CONGO BRAZZAVILLE", "GABON", "GUINEE EQUATORIALE", "TCHAD"}
+
+
+def monnaie(texte):
+    m = re.search(r"chiffres en milliers de ([^)]*)\)", texte, re.I)
+    if not m:
+        return ""
+    for motif, nom in MONNAIES:
+        if re.search(motif, m.group(1), re.I):
+            return nom
+    return " ".join(m.group(1).split())
+
 
 # Libelles tronques ou alteres dans le PDF (p. 86 : "Actifs" ; p. 107 : "U°E")
 ALIAS = {"actifs": "Actifs admis", "ue": "Accidents corporels et maladie",
@@ -184,13 +201,14 @@ def lire_fiche(page, num_page):
     if iA is None or iB is None:
         return None
     iC = index(r"^Rubriques", iB)
-    if iC is None:
-        return None
+    sans_c = iC is None  # fiche sans bloc Resultats et marge (12e edition)
+    if sans_c:
+        iC = len(ls)
     branche = "Non-vie" if re.search("SINISTRALITE", txt[iB], re.I) else "Vie"
 
     # --- Identification ---
     ident = {"Societe": "", "Pays": "", "DG": "", "Date": "", "Capital": "",
-             "Cadres": None, "Maitrise": None, "Employes": None}
+             "Cadres": None, "Maitrise": None, "Employes": None, "Monnaie": monnaie("\n".join(txt))}
     noms_eff = {"cadres": "Cadres", "maîtrise": "Maitrise", "maitrise": "Maitrise",
                 "employés": "Employes", "employes": "Employes"}
     for l, t in zip(ls[:iA], txt[:iA]):
@@ -312,7 +330,7 @@ def lire_fiche(page, num_page):
             cles_l = [("EP", nom_bloc, cat, lab, mes, an) for mes, an in cols]
             if mes_unique and nom_bloc != "Sinistralite" and vals[0] and vals[1] and len(pc) == 3:
                 tester(cles_l, pc[2], vals[0], vals[1], "evolution")
-            elif branche == "Non-vie" and nom_bloc == "Sinistralite":
+            elif branche == "Non-vie" and nom_bloc == "Sinistralite" and re.search(r"S ?/ ?P", entete):
                 non_nuls = [k for k in range(2) if vals[k]]
                 if len(pc) == len(non_nuls) + 1 and len(non_nuls) == 2:
                     # 12e a 16e editions : ratio par annee puis evolution
@@ -325,8 +343,16 @@ def lire_fiche(page, num_page):
                             tester([cles_l[k], ("EP", "Emissions", cat, lab, mes_p, annees[k])],
                                    p_, pa, vals[k], "ratio sinistres/primes")
         for (mes, an) in cols:
-            s = sommes.get((mes, an), 0)
+            detail = [e for e in entrees if e[0] == "EP" and e[1] == nom_bloc and e[4] == mes and e[5] == an
+                      and e[2] != "Acceptations" and e[6] is not None]
             t = totaux.get(("total", mes, an))
+            if not detail and t:
+                # annee publiee sans detail par branche (changement de nomenclature) : le total est
+                # alors la seule donnee saisie
+                entrees.append(("EP", nom_bloc, "Total", "Total affaires directes", mes, an, t))
+                controles.append(f"{nom_bloc} / {mes} / {an} : pas de detail par branche, total repris")
+                continue
+            s = sommes.get((mes, an), 0)
             e = totaux.get(("ensemble", mes, an))
             acc = sommes.get(("acc", mes, an), 0)
             if t is not None and abs(s - t) <= 2 and s:
@@ -342,6 +368,12 @@ def lire_fiche(page, num_page):
     bloc_ab(iB, iC, "Sinistralite" if branche == "Non-vie" else "Prestations")
 
     # --- Bloc C ---
+    if sans_c:
+        controles.append("pas de bloc Resultats et marge")
+        return {"page": num_page, "page_imprimee": next((t.strip(" -") for t in txt[::-1]
+                                                         if re.fullmatch(r"-\s*\d+\s*-", t.strip())), ""),
+                "branche": branche, "annees": annees, "ident": ident, "entrees": entrees,
+                "controles": controles, "verifs": verifs}
     ent = ls[iC] if sum(1 for m in ls[iC] if ANNEE.match(m["text"])) >= 2 else \
         next((l for l in ls[iC:iC + 2] if sum(1 for m in l if ANNEE.match(m["text"])) >= 2), None)
     centres = [centre(m) for m in ent if ANNEE.match(m["text"])][:2] if ent else None
@@ -508,6 +540,8 @@ def lire_pdf(pdf_path, reassureurs=None):
                 f["controles"].append(f"pays lu dans le PDF : '{f['ident']['Pays']}', remplace par {pays_section}")
                 p = pays_section
             f["ident"]["Pays"] = p
+            if not f["ident"]["Monnaie"]:
+                f["ident"]["Monnaie"] = "F CFA" if p in ZONE_CFA else "non indiquee"
             fiches.append(f)
     return fiches, ignorees
 

@@ -215,32 +215,33 @@ def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
                 lus[(typ, bloc, cat, rub, mes, an)] = v
             structure = par_groupe.get((lib, nomenclature(f)), set())
             for c in union.get(f["branche"], ()):
-                if c not in structure:
+                if c not in structure and c[2] != "Total":
                     for an in f["annees"]:
                         lus.setdefault(c + (an,), ND)
             for (typ, bloc, cat, rub, mes, an), v in lus.items():
                 cle_l = (typ, bloc, cat or None, rub, mes or None)
                 pubs = d.setdefault(cle_l, {}).setdefault(an, [])
-                pubs.append((lib, v, ref(f)))
+                pubs.append((lib, v, ref(f), f["ident"].get("Monnaie") or "F CFA"))
                 npub = max(npub, len(pubs))
         donnees.append(d)
 
-    e_id = ["No enregistrement", "No societe", "Edition", "Societe", "Pays", "Branche", "Directeur general",
+    e_id = ["No enregistrement", "No societe", "Edition", "Societe", "Pays", "Branche", "Monnaie", "Directeur general",
             "Date de creation", "Capital social (F CFA)", "Cadres", "Maitrise", "Employes", "Annee N", "Source"]
     idv = feuille("Identification", e_id)
-    e_ep = ["No societe", "Societe", "Pays", "Branche", "Bloc", "Categorie", "Rubrique", "Mesure", "Annee"]
-    e_cc = ["No societe", "Societe", "Pays", "Branche", "Rubrique", "Annee"]
-    # Une annee est publiee dans une ou plusieurs editions (N dans l'une, N-1 dans la suivante) :
+    e_ep = ["No societe", "Societe", "Pays", "Branche", "Monnaie", "Bloc", "Categorie", "Rubrique", "Mesure", "Annee"]
+    e_cc = ["No societe", "Societe", "Pays", "Branche", "Monnaie", "Rubrique", "Annee"]
+    # Montants en milliers de F CFA, sauf les quelques fiches d'editions anciennes libellees dans une
+    # autre monnaie (colonne Monnaie). Une annee est publiee dans une ou plusieurs editions (N dans l'une, N-1 dans la suivante) :
     # une paire de colonnes (valeur, edition) par publication, de la plus ancienne a la plus recente.
     # "Valeur" retient par formule la publication la plus recente qui donne un nombre ; a defaut,
     # "Non disponible" si la rubrique n'existe pas dans la mise en page des editions concernees.
-    pub_b = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k} (milliers F CFA)", f"Edition publication {k}")]
-    pub_v = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k} (F CFA)", f"Edition publication {k}")]
-    epv = feuille("Emission&Prestations", e_ep + ["Valeur (F CFA)", "Source retenue"] + pub_v)
-    ccv = feuille("Chiffres clés", e_cc + ["Valeur (F CFA)", "Source retenue"] + pub_v)
-    epb = feuille("Emission&Prestations (brut)", e_ep + ["Valeur (milliers F CFA)", "Source retenue"] + pub_b
+    pub_b = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k} (milliers)", f"Edition publication {k}")]
+    pub_v = [x for k in range(1, npub + 1) for x in (f"Valeur publication {k}", f"Edition publication {k}")]
+    epv = feuille("Emission&Prestations", e_ep + ["Valeur", "Source retenue"] + pub_v)
+    ccv = feuille("Chiffres clés", e_cc + ["Valeur", "Source retenue"] + pub_v)
+    epb = feuille("Emission&Prestations (brut)", e_ep + ["Valeur (milliers)", "Source retenue"] + pub_b
                   + [f"Reference publication {k}" for k in range(1, npub + 1)], True)
-    ccb = feuille("Chiffres clés (brut)", e_cc + ["Valeur (milliers F CFA)", "Source retenue"] + pub_b
+    ccb = feuille("Chiffres clés (brut)", e_cc + ["Valeur (milliers)", "Source retenue"] + pub_b
                   + [f"Reference publication {k}" for k in range(1, npub + 1)], True)
 
     def formules(n_base, r):
@@ -266,22 +267,23 @@ def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
             n_enr += 1
             i = f["ident"]
             idv.append([n_enr, no, lib, s["nom"] if f["illisible"] else i["Societe"], s["pays"],
-                        s["branche"], i["DG"] or None, ex.date_ou_texte(i["Date"]), ex.capital(i["Capital"]),
+                        s["branche"], i.get("Monnaie") or "F CFA", i["DG"] or None, ex.date_ou_texte(i["Date"]), ex.capital(i["Capital"]),
                         i["Cadres"], i["Maitrise"], i["Employes"], f["annees"][1], ref(f)])
         for cle_l in sorted(d, key=lambda c: tuple(x or "" for x in c)):
             typ, bloc, cat, rub, mes = cle_l
             for an in sorted(d[cle_l]):
                 pubs = sorted(d[cle_l][an], key=lambda p: rang[p[0]])
+                mon = " / ".join(dict.fromkeys(p[3] for p in pubs))
                 if typ == "EP":
-                    wsb, wsv, nomb, cles = epb, epv, "Emission&Prestations (brut)", [bloc, cat, rub, mes, an]
+                    wsb, wsv, nomb, cles = epb, epv, "Emission&Prestations (brut)", [mon, bloc, cat, rub, mes, an]
                     n_base = len(e_ep)
                 else:
-                    wsb, wsv, nomb, cles = ccb, ccv, "Chiffres clés (brut)", [rub, an]
+                    wsb, wsv, nomb, cles = ccb, ccv, "Chiffres clés (brut)", [mon, rub, an]
                     n_base = len(e_cc)
                 r = wsb.max_row + 1
                 f_val, f_src, cv, cs = formules(n_base, r)
-                vals = [x for lib, v, _ in pubs for x in (v, lib)] + [None, None] * (npub - len(pubs))
-                refs = [rf for _, _, rf in pubs] + [None] * (npub - len(pubs))
+                vals = [x for lib, v, _, _ in pubs for x in (v, lib)] + [None, None] * (npub - len(pubs))
+                refs = [p[2] for p in pubs] + [None] * (npub - len(pubs))
                 wsb.append(base_soc + cles + [f_val, f_src] + vals + refs)
                 cr = get_column_letter(n_base + 1)
                 ligne_v = base_soc + cles + [f"=IF(ISNUMBER('{nomb}'!{cr}{r}),'{nomb}'!{cr}{r}*1000,'{nomb}'!{cr}{r})",
@@ -312,7 +314,7 @@ def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
                 if cle_l[0] != d_type:
                     continue
                 for pubs in par_an.values():
-                    vs = [v for _, v, _ in pubs if isinstance(v, (int, float))]
+                    vs = [p[1] for p in pubs if isinstance(p[1], (int, float))]
                     if len(vs) >= 2:
                         deux += 1
                         egal += max(vs) - min(vs) <= max(1, 0.001 * max(abs(x) for x in vs))
@@ -325,6 +327,10 @@ def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
             vf.append(["Echec de recalcul", lib, f"{src} {soc}", x])
 
     nt = feuille("Notes", ["Type", "Reference", "Detail"])
+    nt.append(["Monnaie", "toutes editions", "montants en milliers de la monnaie indiquee (F CFA sauf "
+               "quelques fiches des editions 2005 a 2016 : Burundi, Guinee, Madagascar, Rwanda, Mauritanie...)"])
+    nt.append(["Total affaires directes", "editions 12e, 18e, 19e...", "annee publiee sans detail par branche : "
+               "le total imprime est repris, rubrique Total affaires directes"])
     nt.append([ND, "toutes editions", "la rubrique ou la mesure n'existe pas dans la mise en page de l'edition "
                "(nomenclature ou bloc different) ; une case vide signifie que la rubrique existe mais que "
                "la fiche ne la renseigne pas"])
@@ -333,9 +339,9 @@ def ecrire(societes, notes, sortie, libelles, bilans=None, editions=None):
     for n in notes:
         nt.append(list(n))
 
-    for c in idv["H"][1:]:
-        c.number_format = "dd/mm/yyyy"
     for c in idv["I"][1:]:
+        c.number_format = "dd/mm/yyyy"
+    for c in idv["J"][1:]:
         c.number_format = "#,##0"
     for ws, n_base in ((epv, len(e_ep)), (ccv, len(e_cc)), (epb, len(e_ep)), (ccb, len(e_cc))):
         fmt = "#,##0.000" if ws.sheet_state == "hidden" else "#,##0"
