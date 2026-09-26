@@ -2,9 +2,9 @@
 
 Les valeurs attendues ont ete relevees a la main sur les pages rendues en image
 (controle visuel), puis figees ici. Les PDF sont cherches dans FANAF_PDF_DIR
-(par defaut la racine du depot) ; un test est ignore si son PDF est absent.
+(par defaut le dossier "Annuaire des societes membres") ; un test est ignore si son PDF est absent.
 
-Lancement : python -m pytest tests -q
+Lancement, depuis ce dossier : python -m pytest tests -q
 """
 import os
 import sys
