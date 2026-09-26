@@ -13,3 +13,11 @@ Publication annuelle de la FANAF et d'Atlas Magazine, parue pour l'Assemblee gen
 | 2026 | [Atlas Magazine](https://www.atlas-mag.net/fr/articles/special-chiffres-fanaf-edition-2026) |
 
 Aucune edition n'est encore extraite.
+
+## Collecte
+
+`scraper_special_chiffres.R` telecharge les editions disponibles dans `documents/`, avec un fichier `inventaire.csv`. A lancer depuis la racine du depot :
+
+```
+Rscript "Special Chiffres/scraper_special_chiffres.R"
+```
